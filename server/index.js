@@ -285,6 +285,16 @@ async function deletePendingPurchase(sessionId) {
 // ===========================================
 // DISCORD OAUTH2 ROUTES
 // ===========================================
+
+// Helper to ensure URL has https://
+function getWebsiteUrl() {
+    let url = process.env.WEBSITE_URL || '';
+    if (url && !url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://' + url;
+    }
+    return url;
+}
+
 app.get('/auth/discord', (req, res) => {
     const { product } = req.query;
     
@@ -296,7 +306,7 @@ app.get('/auth/discord', (req, res) => {
     
     const params = new URLSearchParams({
         client_id: process.env.DISCORD_CLIENT_ID,
-        redirect_uri: `${process.env.WEBSITE_URL}/auth/discord/callback`,
+        redirect_uri: `${getWebsiteUrl()}/auth/discord/callback`,
         response_type: 'code',
         scope: 'identify email guilds.join',
         state: state
@@ -324,7 +334,7 @@ app.get('/auth/discord/callback', async (req, res) => {
                 client_secret: process.env.DISCORD_CLIENT_SECRET,
                 grant_type: 'authorization_code',
                 code: code,
-                redirect_uri: `${process.env.WEBSITE_URL}/auth/discord/callback`
+                redirect_uri: `${getWebsiteUrl()}/auth/discord/callback`
             })
         });
         
