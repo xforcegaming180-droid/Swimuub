@@ -304,6 +304,20 @@ async function getPendingPurchaseByEmail(email) {
     }
 }
 
+// Get pending purchase by Discord ID
+async function getPendingPurchaseByDiscordId(discordId) {
+    const client = await pool.connect();
+    try {
+        const result = await client.query(
+            `SELECT * FROM pending_purchases WHERE discord_id = $1 AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
+            [discordId]
+        );
+        return result.rows[0] || null;
+    } finally {
+        client.release();
+    }
+}
+
 // Get most recent pending purchase (last resort fallback)
 // Used when we can't match by email - gets the most recent session created in last 30 mins
 async function getMostRecentPendingPurchase() {
@@ -480,9 +494,18 @@ app.get('/api/checkout-url/:sessionId', async (req, res) => {
         return res.status(400).json({ error: 'Product not configured' });
     }
     
-    // Just return the static checkout URL - we'll match by product type + timing in webhook
+    // Create custom_data with session info for reliable matching
+    const customData = {
+        sessionId: req.params.sessionId,
+        discordId: session.discord_id,
+        discordUsername: session.discord_username
+    };
+    
+    // Build checkout URL with custom_data parameter
+    const checkoutUrl = `${baseUrl}?custom_data=${encodeURIComponent(JSON.stringify(customData))}`;
+    
     console.log('Checkout URL for session:', req.params.sessionId, 'product:', session.product);
-    res.json({ checkoutUrl: baseUrl });
+    res.json({ checkoutUrl });
 });
 
 // Check payment status endpoint (polled by waiting page)
@@ -541,14 +564,55 @@ app.post('/webhook/fungies', async (req, res) => {
             // Try to find session - multiple fallback methods
             let session = null;
             
-            // Method 1: Try to find by email
-            if (customerEmail) {
+            // Method 1: Check custom_data (most reliable - passed via URL)
+            // custom_data can be in order, items, or at root level depending on Fungies version
+            let customData = null;
+            
+            // Try to find custom_data in various locations
+            if (order?.customData) {
+                customData = order.customData;
+            } else if (order?.custom_data) {
+                customData = order.custom_data;
+            } else if (event.data?.customData) {
+                customData = event.data.customData;
+            } else if (event.data?.custom_data) {
+                customData = event.data.custom_data;
+            } else if (items?.[0]?.customData) {
+                customData = items[0].customData;
+            } else if (items?.[0]?.custom_data) {
+                customData = items[0].custom_data;
+            }
+            
+            // Parse custom_data if it's a string
+            if (typeof customData === 'string') {
+                try {
+                    customData = JSON.parse(customData);
+                } catch (e) {
+                    console.log('Failed to parse custom_data:', e);
+                }
+            }
+            
+            console.log('Custom data found:', customData);
+            
+            // Try to get session from custom_data
+            if (customData?.sessionId) {
+                console.log('Looking up session by custom_data sessionId:', customData.sessionId);
+                session = await getPendingPurchase(customData.sessionId);
+            }
+            
+            // Method 2: Try to find by Discord ID from custom_data
+            if (!session && customData?.discordId) {
+                console.log('Looking up session by custom_data discordId:', customData.discordId);
+                session = await getPendingPurchaseByDiscordId(customData.discordId);
+            }
+            
+            // Method 3: Try to find by email (fallback)
+            if (!session && customerEmail) {
                 console.log('Trying email lookup:', customerEmail);
                 session = await getPendingPurchaseByEmail(customerEmail);
             }
             
-            // Method 2: Get most recent pending purchase (last 30 mins)
-            // This works because typically only one person is checking out at a time
+            // Method 4: Get most recent pending purchase (last resort)
             if (!session) {
                 console.log('Email not matched, trying most recent pending purchase...');
                 session = await getMostRecentPendingPurchase();
