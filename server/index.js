@@ -418,7 +418,17 @@ app.get('/api/checkout-url/:sessionId', async (req, res) => {
         return res.status(404).json({ error: 'Session not found' });
     }
     
-    // Fungies checkout URLs - configure in Railway env vars
+    // Fungies offer IDs - configure in Railway env vars
+    // These are the product/offer UUIDs from your Fungies dashboard
+    const offerIds = {
+        'regular-monthly': process.env.FUNGIES_OFFER_REGULAR_MONTHLY,
+        'regular-lifetime': process.env.FUNGIES_OFFER_REGULAR_LIFETIME,
+        'master-monthly': process.env.FUNGIES_OFFER_MASTER_MONTHLY,
+        'master-lifetime': process.env.FUNGIES_OFFER_MASTER_LIFETIME,
+        'nightly': process.env.FUNGIES_OFFER_NIGHTLY
+    };
+    
+    // Fallback checkout URLs (static links) if API keys not configured
     const checkoutUrls = {
         'regular-monthly': process.env.FUNGIES_URL_REGULAR_MONTHLY,
         'regular-lifetime': process.env.FUNGIES_URL_REGULAR_LIFETIME,
@@ -427,16 +437,62 @@ app.get('/api/checkout-url/:sessionId', async (req, res) => {
         'nightly': process.env.FUNGIES_URL_NIGHTLY
     };
     
+    const offerId = offerIds[session.product];
     const baseUrl = checkoutUrls[session.product];
     
+    // Try to create dynamic checkout with session ID via Fungies API
+    if (offerId && process.env.FUNGIES_PUBLIC_KEY && process.env.FUNGIES_SECRET_KEY) {
+        try {
+            console.log('Creating Fungies checkout element for session:', req.params.sessionId);
+            
+            const fungiesResponse = await fetch('https://api.fungies.io/v0/elements/checkout/create', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-fngs-public-key': process.env.FUNGIES_PUBLIC_KEY,
+                    'x-fngs-secret-key': process.env.FUNGIES_SECRET_KEY
+                },
+                body: JSON.stringify({
+                    offersIds: [offerId],
+                    name: `checkout-${req.params.sessionId}`,
+                    customFields: [
+                        {
+                            id: 'sessionId',
+                            value: req.params.sessionId
+                        },
+                        {
+                            id: 'discordId', 
+                            value: session.discord_id
+                        }
+                    ]
+                })
+            });
+            
+            const fungiesData = await fungiesResponse.json();
+            console.log('Fungies API response:', JSON.stringify(fungiesData, null, 2));
+            
+            if (fungiesData.status === 'success' && fungiesData.data?.checkoutElement?.id) {
+                const checkoutElementId = fungiesData.data.checkoutElement.id;
+                const checkoutUrl = `https://app.fungies.io/checkout/${checkoutElementId}`;
+                console.log('Created checkout URL:', checkoutUrl);
+                return res.json({ checkoutUrl });
+            }
+        } catch (error) {
+            console.error('Failed to create Fungies checkout element:', error);
+            // Fall through to static URL fallback
+        }
+    }
+    
+    // Fallback: use static checkout URL with query params
     if (!baseUrl) {
         return res.status(400).json({ error: 'Product not configured' });
     }
     
-    // Build checkout URL with session ID and email, plus success URL
-    const successUrl = `${process.env.WEBSITE_URL}/success.html`;
+    // Try passing session ID in various URL params that Fungies might support
+    const successUrl = `${getWebsiteUrl()}/success.html`;
     const checkoutUrl = `${baseUrl}?client_reference_id=${req.params.sessionId}&prefilled_email=${encodeURIComponent(session.email || '')}&success_url=${encodeURIComponent(successUrl)}`;
     
+    console.log('Using fallback checkout URL:', checkoutUrl);
     res.json({ checkoutUrl });
 });
 
@@ -469,30 +525,79 @@ app.post('/webhook/fungies', async (req, res) => {
         
         // Fungies uses 'payment_success' event type
         if (event.type === 'payment_success') {
-            const { items, order, customer } = event.data;
+            const { items, order, customer, checkoutElement } = event.data;
             
             console.log('Customer:', customer);
             console.log('Order:', order);
             console.log('Items:', items);
+            console.log('Checkout Element:', checkoutElement);
             
             // Get customer email to find pending session
             const customerEmail = customer?.email;
             
-            // Try to find session by email or by custom field
+            // Try to find session by custom fields from various locations
             let session = null;
+            let sessionId = null;
             
-            // First try custom fields if set up (sessionId field)
-            if (items && items[0]?.customFields?.sessionId) {
-                session = await getPendingPurchase(items[0].customFields.sessionId);
+            // Method 1: Check checkout element custom fields (from API-created checkouts)
+            if (checkoutElement?.customFields) {
+                console.log('Checkout element custom fields:', checkoutElement.customFields);
+                const sessionField = checkoutElement.customFields.find(f => f.id === 'sessionId');
+                if (sessionField?.value) {
+                    sessionId = sessionField.value;
+                    console.log('Found session ID in checkout element:', sessionId);
+                }
             }
             
-            // Fallback: find by email
+            // Method 2: Check items custom fields
+            if (!sessionId && items && items.length > 0) {
+                for (const item of items) {
+                    console.log('Item custom fields:', item.customFields);
+                    // Custom fields might be an object or array
+                    if (item.customFields?.sessionId) {
+                        sessionId = item.customFields.sessionId;
+                        console.log('Found session ID in item (object):', sessionId);
+                        break;
+                    }
+                    if (Array.isArray(item.customFields)) {
+                        const sessionField = item.customFields.find(f => f.id === 'sessionId');
+                        if (sessionField?.value) {
+                            sessionId = sessionField.value;
+                            console.log('Found session ID in item (array):', sessionId);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // Method 3: Check order metadata
+            if (!sessionId && order?.metadata?.sessionId) {
+                sessionId = order.metadata.sessionId;
+                console.log('Found session ID in order metadata:', sessionId);
+            }
+            
+            // Method 4: Check client_reference_id (if passed via URL)
+            if (!sessionId && order?.clientReferenceId) {
+                sessionId = order.clientReferenceId;
+                console.log('Found session ID in client reference:', sessionId);
+            }
+            
+            // Get session by ID
+            if (sessionId) {
+                session = await getPendingPurchase(sessionId);
+                console.log('Session lookup by ID result:', session ? 'Found' : 'Not found');
+            }
+            
+            // Fallback: find by email (last resort)
             if (!session && customerEmail) {
+                console.log('Falling back to email lookup:', customerEmail);
                 session = await getPendingPurchaseByEmail(customerEmail);
             }
             
             if (!session) {
-                console.error('Session not found for customer:', customerEmail);
+                console.error('Session not found for customer:', customerEmail, 'sessionId:', sessionId);
+                // Notify admin about failed session lookup
+                await notifyAdminSessionNotFound(customerEmail, sessionId, order);
                 // Still return 200 to acknowledge receipt
                 return res.status(200).json({ received: true, error: 'Session not found' });
             }
@@ -614,6 +719,27 @@ async function notifyOutOfStock(productType, discordId) {
         await admin.send({ embeds: [embed] });
     } catch (error) {
         console.error('Failed to notify:', error);
+    }
+}
+
+async function notifyAdminSessionNotFound(customerEmail, sessionId, order) {
+    try {
+        const admin = await discordClient.users.fetch(process.env.ADMIN_USER_ID);
+        
+        const embed = new EmbedBuilder()
+            .setColor(0xef4444)
+            .setTitle('⚠️ Payment Received - Session Not Found!')
+            .setDescription('A payment was received but the session could not be found. You may need to manually verify and deliver.')
+            .addFields(
+                { name: 'Customer Email', value: customerEmail || 'Not provided', inline: true },
+                { name: 'Session ID Attempted', value: sessionId || 'None', inline: true },
+                { name: 'Order Number', value: order?.number || order?.id || 'Unknown', inline: true }
+            )
+            .setTimestamp();
+        
+        await admin.send({ embeds: [embed] });
+    } catch (error) {
+        console.error('Failed to notify about session not found:', error);
     }
 }
 
