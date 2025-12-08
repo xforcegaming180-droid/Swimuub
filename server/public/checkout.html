@@ -313,14 +313,34 @@
                 // Handle checkout button click
                 checkoutBtn.addEventListener('click', async function() {
                     checkoutBtn.disabled = true;
-                    checkoutBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Redirecting...';
+                    checkoutBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Opening checkout...';
                     
                     try {
                         const checkoutResponse = await fetch(`/api/checkout-url/${sessionId}`);
                         const checkoutData = await checkoutResponse.json();
                         
                         if (checkoutData.checkoutUrl) {
-                            window.location.href = checkoutData.checkoutUrl;
+                            // Open Fungies checkout in a new tab
+                            window.open(checkoutData.checkoutUrl, '_blank');
+                            
+                            // Update button to show payment pending
+                            checkoutBtn.innerHTML = '<i class="fas fa-external-link-alt"></i> Payment opened in new tab';
+                            checkoutBtn.style.background = 'linear-gradient(135deg, #6366f1, #8b5cf6)';
+                            
+                            // Show instructions and redirect to success page
+                            const successNote = document.createElement('div');
+                            successNote.className = 'payment-pending-note';
+                            successNote.innerHTML = `
+                                <p><i class="fas fa-info-circle"></i> Complete your payment in the new tab.</p>
+                                <p>Redirecting to confirmation page...</p>
+                            `;
+                            successNote.style.cssText = 'margin-top: 20px; padding: 15px; background: rgba(99, 102, 241, 0.1); border-radius: 12px; border: 1px solid rgba(99, 102, 241, 0.3); color: #a5b4fc; text-align: center;';
+                            checkoutBtn.parentNode.insertBefore(successNote, checkoutBtn.nextSibling);
+                            
+                            // Redirect to success page after 3 seconds
+                            setTimeout(() => {
+                                window.location.href = '/success.html';
+                            }, 3000);
                         } else {
                             throw new Error('Failed to get checkout URL');
                         }
