@@ -41,7 +41,7 @@ const processedWebhooks = new Set();
 // ---------- DISCORD CLIENT ----------
 const discordClient = new Client({
   intents: [
-    GatewayIntentBits. Guilds,
+    GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildMessages,
@@ -144,7 +144,7 @@ async function savePendingPurchase(sessionId, data) {
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (session_id) DO UPDATE SET
          discord_id = EXCLUDED.discord_id,
-         discord_username = EXCLUDED. discord_username,
+         discord_username = EXCLUDED.discord_username,
          email = EXCLUDED.email,
          product = EXCLUDED.product,
          access_token = EXCLUDED.access_token,
@@ -312,7 +312,7 @@ async function getStockCount() {
 async function getLicenseStats() {
   const client = await pool.connect();
   try {
-    const result = await client. query(`
+    const result = await client.query(`
       SELECT 
         COUNT(*) as total,
         SUM(CASE WHEN status = 'available' AND claimed = FALSE THEN 1 ELSE 0 END) as available,
@@ -338,7 +338,7 @@ async function sendLicenseDM(discordId, licenseKey, product) {
       .setDescription('Thank you for your purchase!')
       .addFields(
         { name: 'Product', value: product.name, inline: true },
-        { name:  'Duration', value: product.duration === -1 ? 'Lifetime' : `${product.duration} days`, inline: true },
+        { name: 'Duration', value: product.duration === -1 ? 'Lifetime' : `${product.duration} days`, inline: true },
         { name: 'License Key', value: `\`${licenseKey}\``, inline: false },
         { name: 'How to Activate', value: 'Use the license key in our Discord server or website', inline: false }
       )
@@ -348,7 +348,7 @@ async function sendLicenseDM(discordId, licenseKey, product) {
     await user.send({ embeds: [embed] });
     return true;
   } catch (error) {
-    console.error('Failed to send license DM:', error. message);
+    console.error('Failed to send license DM:', error.message);
     return false;
   }
 }
@@ -357,7 +357,7 @@ async function sendAdminNotification(customerInfo, licenseKey, product) {
   if (!discordClient || !process.env.ADMIN_DISCORD_ID) return;
 
   try {
-    const admin = await discordClient.users. fetch(process.env.ADMIN_DISCORD_ID);
+    const admin = await discordClient.users.fetch(process.env.ADMIN_DISCORD_ID);
     const purchaseEmbed = new EmbedBuilder()
       .setColor('#667eea')
       .setTitle('📦 New Purchase Notification')
@@ -365,7 +365,7 @@ async function sendAdminNotification(customerInfo, licenseKey, product) {
       .addFields(
         { name: 'Customer', value: customerInfo.discord_username || 'Unknown', inline: true },
         { name: 'Discord ID', value: customerInfo.discord_id || 'N/A', inline: true },
-        { name: 'Email', value: customerInfo.email || 'N/A', inline:  false },
+        { name: 'Email', value: customerInfo.email || 'N/A', inline: false },
         { name: 'Product', value: product.name, inline: true },
         { name: 'Duration', value: product.duration === -1 ? 'Lifetime' : `${product.duration} days`, inline: true },
         { name: 'License Key', value: `\`${licenseKey}\``, inline: false },
@@ -384,7 +384,7 @@ async function sendAdminNotification(customerInfo, licenseKey, product) {
 async function processCheckoutPayload(payload) {
   const data = payload.data || payload;
   const customer = data.customer || data.user || {};
-  let metadata = data.metadata || data. custom_data || data.customData || {};
+  let metadata = data.metadata || data.custom_data || data.customData || {};
 
   if (typeof metadata === 'string') {
     try { metadata = JSON.parse(metadata); } catch (e) { metadata = {}; }
@@ -393,10 +393,10 @@ async function processCheckoutPayload(payload) {
   const customerEmail = customer.email || data.email;
   let session = null;
 
-  if (metadata?. sessionId) {
+  if (metadata?.sessionId) {
     session = await getPendingPurchase(metadata.sessionId);
   }
-  if (! session && metadata?.discordId) {
+  if (!session && metadata?.discordId) {
     session = await getPendingPurchaseByDiscordId(metadata.discordId);
   }
   if (!session && customerEmail) {
@@ -406,7 +406,7 @@ async function processCheckoutPayload(payload) {
     session = await getMostRecentPendingPurchase();
   }
 
-  if (! session) {
+  if (!session) {
     console.error('❌ No pending session found for customer:', customerEmail);
     return { success: false, reason: 'no_pending_session' };
   }
@@ -448,7 +448,7 @@ app.get('/checkout', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'checkout.html'));
 });
 
-app.get('/checkout. html', (req, res) => {
+app.get('/checkout.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'checkout.html'));
 });
 
@@ -465,12 +465,12 @@ app.post('/webhook/polar', async (req, res) => {
 
     if (!signatureValid && webhookSecret && signatureHeader) {
       const parts = signatureHeader.split(',');
-      const signatureValue = parts. length > 1 ? parts[1].trim() : parts[0].trim();
+      const signatureValue = parts.length > 1 ? parts[1].trim() : parts[0].trim();
       const timestamp = req.headers['webhook-timestamp'] || '';
-      const raw = req.rawBody ?  req.rawBody. toString('utf8') : JSON.stringify(req.body);
+      const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body);
 
       const candidates = [
-        { label: 'timestamp + raw', payload: `${timestamp}. ${raw}` },
+        { label: 'timestamp + raw', payload: `${timestamp}.${raw}` },
         { label: 'raw', payload: raw }
       ];
 
@@ -498,11 +498,11 @@ app.post('/webhook/polar', async (req, res) => {
 
     processedWebhooks.add(eventId);
 
-    const successEvents = ['checkout. completed', 'order.created', 'checkout.updated', 'payment.success'];
+    const successEvents = ['checkout.completed', 'order.created', 'checkout.updated', 'payment.success'];
 
     if (successEvents.includes(event.type)) {
       const result = await processCheckoutPayload(event);
-      if (! result.success) {
+      if (!result.success) {
         return res.status(200).json({ received: true, error: result.reason });
       }
     }
@@ -518,7 +518,7 @@ app.post('/webhook/polar', async (req, res) => {
 app.post('/api/licenses/add', async (req, res) => {
   const { keys, token } = req.body;
 
-  if (!token || token !== process.env. INTERNAL_PROCESS_TOKEN) {
+  if (!token || token !== process.env.INTERNAL_PROCESS_TOKEN) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -528,11 +528,11 @@ app.post('/api/licenses/add', async (req, res) => {
 
   try {
     for (const key of keys) {
-      await addLicenseKeyToStock(key. trim().toUpperCase(), 'swimhub');
+      await addLicenseKeyToStock(key.trim().toUpperCase(), 'swimhub');
     }
 
     const stock = await getStockCount();
-    console.log(`✅ Added ${keys.length} license keys.  Total available: ${stock}`);
+    console.log(`✅ Added ${keys.length} license keys. Total available: ${stock}`);
     
     res.json({
       success: true,
@@ -547,9 +547,9 @@ app.post('/api/licenses/add', async (req, res) => {
 app.get('/api/licenses/stock', async (req, res) => {
   try {
     const stats = await getLicenseStats();
-    res.json({ success: true, ... stats });
+    res.json({ success: true, ...stats });
   } catch (error) {
-    res.status(500).json({ error: error. message });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -560,12 +560,12 @@ app.get('/auth/discord', (req, res) => {
     const { product } = req.query;
 
     // Validate product
-    if (!product || ! PRODUCTS[product]) {
+    if (!product || !PRODUCTS[product]) {
       return res.status(400).json({ error: 'Invalid product' });
     }
 
     // Validate Discord credentials
-    if (!process.env.DISCORD_CLIENT_ID || !process.env. DISCORD_CLIENT_SECRET) {
+    if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
       console.error('❌ DISCORD_CLIENT_ID or DISCORD_CLIENT_SECRET not configured');
       return res.status(500).json({ error: 'Discord OAuth not configured' });
     }
@@ -576,8 +576,8 @@ app.get('/auth/discord', (req, res) => {
     }
 
     const sessionId = uuidv4();
-    const clientId = process.env.DISCORD_CLIENT_ID. trim();
-    const scope = 'identify email guilds. join';
+    const clientId = process.env.DISCORD_CLIENT_ID.trim();
+    const scope = 'identify email guilds.join';
     const redirectUri = `${process.env.WEBSITE_URL}/auth/discord/callback`;
     
     // Create state with sessionId and product
@@ -595,7 +595,7 @@ app.get('/auth/discord', (req, res) => {
       state: state
     });
 
-    const discordAuthUrl = `https://discord.com/api/oauth2/authorize?${params. toString()}`;
+    const discordAuthUrl = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
 
     console.log(`✅ Redirecting to Discord OAuth for product: ${product}`);
     console.log(`   Client ID: ${clientId}`);
@@ -633,12 +633,12 @@ app.get('/auth/discord/callback', async (req, res) => {
       sessionId = decodedState.sessionId;
       product = decodedState.product;
     } catch (e) {
-      console.error('Failed to decode state:', e. message);
+      console.error('Failed to decode state:', e.message);
       return res.status(400).json({ error: 'Invalid state parameter' });
     }
 
     // Validate product
-    if (! PRODUCTS[product]) {
+    if (!PRODUCTS[product]) {
       console.error(`Invalid product: ${product}`);
       return res.status(400).json({ error: 'Invalid product' });
     }
@@ -646,7 +646,7 @@ app.get('/auth/discord/callback', async (req, res) => {
     console.log(`🔄 Processing OAuth callback for product: ${product}`);
 
     // Validate Discord credentials
-    if (!process. env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
+    if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
       console.error('❌ Discord credentials missing');
       return res.status(500).json({ error: 'Server configuration error' });
     }
@@ -660,8 +660,8 @@ app.get('/auth/discord/callback', async (req, res) => {
         'Content-Type': 'application/x-www-form-urlencoded'
       },
       body: new URLSearchParams({
-        client_id: process.env. DISCORD_CLIENT_ID. trim(),
-        client_secret:  process.env.DISCORD_CLIENT_SECRET.trim(),
+        client_id: process.env.DISCORD_CLIENT_ID.trim(),
+        client_secret: process.env.DISCORD_CLIENT_SECRET.trim(),
         grant_type: 'authorization_code',
         code: code,
         redirect_uri: `${process.env.WEBSITE_URL}/auth/discord/callback`,
@@ -693,12 +693,12 @@ app.get('/auth/discord/callback', async (req, res) => {
     
     const userResponse = await fetch('https://discord.com/api/v10/users/@me', {
       headers: {
-        'Authorization':  `Bearer ${accessToken}`
+        'Authorization': `Bearer ${accessToken}`
       }
     });
 
     if (!userResponse.ok) {
-      const errorData = await userResponse. text();
+      const errorData = await userResponse.text();
       console.error('Failed to get user info:', errorData);
       return res.status(400).json({ error: 'Failed to get user information' });
     }
@@ -719,7 +719,7 @@ app.get('/auth/discord/callback', async (req, res) => {
       accessToken
     });
 
-    console.log(`✅ Purchase session saved:  ${sessionId}`);
+    console.log(`✅ Purchase session saved: ${sessionId}`);
 
     // Try to add user to Discord server
     if (process.env.DISCORD_BOT_TOKEN && process.env.DISCORD_GUILD_ID) {
@@ -752,7 +752,7 @@ app.get('/auth/discord/callback', async (req, res) => {
     }
 
     // Redirect to checkout
-    console.log(`📦 Redirecting to checkout:  /checkout?session=${sessionId}`);
+    console.log(`📦 Redirecting to checkout: /checkout?session=${sessionId}`);
     res.redirect(`/checkout?session=${sessionId}`);
   } catch (error) {
     console.error('OAuth callback error:', error);
@@ -760,7 +760,7 @@ app.get('/auth/discord/callback', async (req, res) => {
   }
 });
 
-app.get('/api/checkout-url/: sessionId', async (req, res) => {
+app.get('/api/checkout-url/:sessionId', async (req, res) => {
   try {
     const session = await getPendingPurchase(req.params.sessionId);
     
@@ -768,7 +768,7 @@ app.get('/api/checkout-url/: sessionId', async (req, res) => {
       return res.status(404).json({ error: 'Session not found' });
     }
 
-    if (! session.product || ! PRODUCTS[session.product]) {
+    if (!session.product || !PRODUCTS[session.product]) {
       return res.status(400).json({ error: 'Invalid product in session' });
     }
 
@@ -776,14 +776,14 @@ app.get('/api/checkout-url/: sessionId', async (req, res) => {
     const checkoutUrls = {
       'regular-monthly': process.env.POLAR_URL_REGULAR_MONTHLY,
       'regular-lifetime': process.env.POLAR_URL_REGULAR_LIFETIME,
-      'master-monthly': process.env. POLAR_URL_MASTER_MONTHLY,
+      'master-monthly': process.env.POLAR_URL_MASTER_MONTHLY,
       'master-lifetime': process.env.POLAR_URL_MASTER_LIFETIME,
-      'nightly':  process.env.POLAR_URL_NIGHTLY
+      'nightly': process.env.POLAR_URL_NIGHTLY
     };
 
     const baseUrl = checkoutUrls[session.product];
     if (!baseUrl) {
-      return res. status(400).json({ error: 'Product checkout URL not configured' });
+      return res.status(400).json({ error: 'Product checkout URL not configured' });
     }
 
     const metadata = {
@@ -847,11 +847,11 @@ const commands = [
 ].map(c => c.toJSON());
 
 async function registerCommands() {
-  const rest = new REST({ version: '10' }).setToken(process.env. DISCORD_BOT_TOKEN);
+  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
   try {
     console.log('Registering slash commands...');
     await rest.put(
-      Routes.applicationGuildCommands(process.env. DISCORD_CLIENT_ID, process.env. DISCORD_GUILD_ID),
+      Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.DISCORD_GUILD_ID),
       { body: commands }
     );
     console.log('✅ Commands registered');
@@ -862,11 +862,11 @@ async function registerCommands() {
 
 // Command handlers
 discordClient.on('interactionCreate', async (interaction) => {
-  if (! interaction.isCommand()) return;
+  if (!interaction.isCommand()) return;
 
   try {
     if (interaction.commandName === 'addlicense') {
-      const isAdmin = interaction.member?. permissions.has(PermissionFlagsBits.Administrator);
+      const isAdmin = interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
       if (!isAdmin) {
         return interaction.reply({ content: '❌ Admin only', ephemeral: true });
       }
@@ -875,10 +875,10 @@ discordClient.on('interactionCreate', async (interaction) => {
       const keys = keysInput.split(',').map(k => k.trim()).filter(k => k);
 
       if (keys.length === 0) {
-        return interaction. reply({ content: '❌ No valid keys provided', ephemeral: true });
+        return interaction.reply({ content: '❌ No valid keys provided', ephemeral: true });
       }
 
-      await interaction. deferReply({ ephemeral:  true });
+      await interaction.deferReply({ ephemeral: true });
 
       for (const key of keys) {
         await addLicenseKeyToStock(key.toUpperCase(), 'swimhub');
@@ -890,8 +890,8 @@ discordClient.on('interactionCreate', async (interaction) => {
         .setColor('#10b981')
         .setTitle('✅ Keys Added')
         .addFields(
-          { name: 'Keys Added', value: keys.length. toString(), inline: true },
-          { name: 'Total Stock', value: stock. toString(), inline: true }
+          { name: 'Keys Added', value: keys.length.toString(), inline: true },
+          { name: 'Total Stock', value: stock.toString(), inline: true }
         );
 
       await interaction.editReply({ embeds: [embed] });
@@ -908,14 +908,14 @@ discordClient.on('interactionCreate', async (interaction) => {
         .setColor('#667eea')
         .setTitle('📊 License Stock')
         .addFields(
-          { name: 'Available', value: stats.available?. toString() || '0', inline: true },
+          { name: 'Available', value: stats.available?.toString() || '0', inline: true },
           { name: 'Assigned', value: stats.used?.toString() || '0', inline: true },
-          { name:  'Total', value: stats.total?.toString() || '0', inline: true }
+          { name: 'Total', value: stats.total?.toString() || '0', inline: true }
         );
 
       interaction.reply({ embeds: [embed], ephemeral: true });
     }
-    else if (interaction. commandName === 'license') {
+    else if (interaction.commandName === 'license') {
       await interaction.reply({
         content: 'Check your Discord DMs for your license key information',
         ephemeral: true
@@ -923,7 +923,7 @@ discordClient.on('interactionCreate', async (interaction) => {
     }
   } catch (error) {
     console.error('Command error:', error);
-    if (! interaction.replied) {
+    if (!interaction.replied) {
       interaction.reply({ content: '❌ Command failed', ephemeral: true });
     }
   }
@@ -940,10 +940,10 @@ async function start() {
     await initDatabase();
     
     app.listen(PORT, () => {
-      console. log(`✅ Server running on port ${PORT}`);
+      console.log(`✅ Server running on port ${PORT}`);
     });
 
-    await discordClient.login(process. env.DISCORD_BOT_TOKEN);
+    await discordClient.login(process.env.DISCORD_BOT_TOKEN);
   } catch (error) {
     console.error('Startup error:', error);
     process.exit(1);
@@ -954,7 +954,7 @@ start();
 
 // Cleanup
 process.on('SIGINT', () => {
-  console.log('Shutting down.. .');
+  console.log('Shutting down...');
   discordClient.destroy();
   pool.end();
   process.exit(0);
