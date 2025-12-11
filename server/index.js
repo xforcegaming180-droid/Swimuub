@@ -1,6 +1,6 @@
-// index.js - full file (drop into your project, restart server)
-// Includes: raw body capture for webhooks, Polar + Fungies handlers, Discord bot, DB helpers.
-// Also serves checkout.html at /checkout and /checkout.html (Option A)
+// ==================== SWIMHUB LICENSE MANAGEMENT SYSTEM ====================
+// Complete integrated system:  Database + Discord Bot + Express Server
+// Features: Manual license key addition, automatic assignment, admin notifications
 
 require('dotenv').config();
 const express = require('express');
@@ -9,23 +9,48 @@ const path = require('path');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { Pool } = require('pg');
-const fetch = global.fetch || require('node-fetch'); // Node18+ has global fetch
-const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const fetch = global.fetch || require('node-fetch');
+const { 
+  Client, 
+  GatewayIntentBits, 
+  EmbedBuilder, 
+  REST, 
+  Routes, 
+  SlashCommandBuilder, 
+  PermissionFlagsBits,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
+} = require('discord.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-// ---------- Basic constants (copy or adapt PRODUCTS to your config) ----------
+// ---------- CONSTANTS ----------
 const PRODUCTS = {
   'regular-monthly': { name: 'Regular Monthly', duration: 30 },
   'regular-lifetime': { name: 'Regular Lifetime', duration: -1 },
   'master-monthly': { name: 'Master Monthly', duration: 30 },
   'master-lifetime': { name: 'Master Lifetime', duration: -1 },
-  'nightly': { name: 'Nightly', duration: 7 }
+  'nightly':  { name: 'Nightly', duration: 7 }
 };
 
-// ---------- Middleware: Capture raw body for webhook HMAC ----------
+const processedWebhooks = new Set();
+
+// ---------- DISCORD CLIENT ----------
+const discordClient = new Client({
+  intents: [
+    GatewayIntentBits. Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
+  partials: ['CHANNEL', 'MESSAGE']
+});
+
+// ---------- MIDDLEWARE ----------
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf;
@@ -35,27 +60,11 @@ app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Helpful quick debug of env (length only so we don't print secret)
-console.log('POLAR_WEBHOOK_SECRET length =', (process.env.POLAR_WEBHOOK_SECRET || '').length);
-
-// ---------- Option A: serve checkout page at /checkout and /checkout.html ----------
-app.get('/checkout', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'checkout.html'));
-});
-app.get('/checkout.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'checkout.html'));
-});
-
-// ---------- Discord client ----------
-const discordClient = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildMessages],
-  partials: ['CHANNEL'] // to allow DMs
-});
-
-// ---------- Utility DB helpers (kept simple and synchronous-looking) ----------
+// ---------- DATABASE INITIALIZATION ----------
 async function initDatabase() {
   const client = await pool.connect();
   try {
+    // Pending purchases table
     await client.query(`
       CREATE TABLE IF NOT EXISTS pending_purchases (
         session_id TEXT PRIMARY KEY,
@@ -65,24 +74,36 @@ async function initDatabase() {
         product TEXT,
         access_token TEXT,
         status TEXT DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT now()
+        license_key TEXT,
+        created_at TIMESTAMP DEFAULT now(),
+        updated_at TIMESTAMP DEFAULT now()
       );
     `);
+
+    // License stock table
     await client.query(`
       CREATE TABLE IF NOT EXISTS license_stock (
-        license_key TEXT PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
+        license_key TEXT UNIQUE NOT NULL,
         product_type TEXT,
+        status TEXT DEFAULT 'available',
         claimed BOOLEAN DEFAULT FALSE,
         claimed_by TEXT,
-        claimed_at TIMESTAMP
+        claimed_at TIMESTAMP,
+        customer_email TEXT,
+        customer_discord_id TEXT,
+        created_at TIMESTAMP DEFAULT now(),
+        updated_at TIMESTAMP DEFAULT now()
       );
     `);
+
+    // User licenses table
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_licenses (
-        id serial PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         discord_id TEXT,
         discord_username TEXT,
-        license_key TEXT,
+        license_key TEXT UNIQUE,
         product_type TEXT,
         product_name TEXT,
         expires_at TIMESTAMP,
@@ -90,10 +111,30 @@ async function initDatabase() {
         assigned_at TIMESTAMP DEFAULT now()
       );
     `);
+
+    // Purchase log table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS purchase_log (
+        id SERIAL PRIMARY KEY,
+        license_key TEXT,
+        customer_email TEXT,
+        customer_discord_id TEXT,
+        customer_username TEXT,
+        product_type TEXT,
+        amount DECIMAL(10, 2),
+        payment_method TEXT,
+        transaction_id TEXT,
+        purchase_date TIMESTAMP DEFAULT now()
+      );
+    `);
+
+    console.log('✅ Database tables initialized');
   } finally {
     client.release();
   }
 }
+
+// ---------- DATABASE HELPERS ----------
 
 async function savePendingPurchase(sessionId, data) {
   const client = await pool.connect();
@@ -105,9 +146,10 @@ async function savePendingPurchase(sessionId, data) {
          discord_id = EXCLUDED.discord_id,
          discord_username = EXCLUDED.discord_username,
          email = EXCLUDED.email,
-         product = EXCLUDED.product,
-         access_token = EXCLUDED.access_token`,
-      [sessionId, data.discordId, data.discordUsername, data.email, data.product, data.accessToken]
+         product = EXCLUDED. product,
+         access_token = EXCLUDED.access_token,
+         updated_at = now()`,
+      [sessionId, data. discordId, data.discordUsername, data.email, data.product, data.accessToken]
     );
   } finally {
     client.release();
@@ -127,7 +169,10 @@ async function getPendingPurchase(sessionId) {
 async function getPendingPurchaseByEmail(email) {
   const client = await pool.connect();
   try {
-    const result = await client.query('SELECT * FROM pending_purchases WHERE email = $1 ORDER BY created_at DESC LIMIT 1', [email]);
+    const result = await client.query(
+      'SELECT * FROM pending_purchases WHERE email = $1 AND status = $2 ORDER BY created_at DESC LIMIT 1',
+      [email, 'pending']
+    );
     return result.rows[0] || null;
   } finally {
     client.release();
@@ -135,9 +180,12 @@ async function getPendingPurchaseByEmail(email) {
 }
 
 async function getPendingPurchaseByDiscordId(discordId) {
-  const client = await pool.connect();
+  const client = await pool. connect();
   try {
-    const result = await client.query('SELECT * FROM pending_purchases WHERE discord_id = $1 ORDER BY created_at DESC LIMIT 1', [discordId]);
+    const result = await client.query(
+      'SELECT * FROM pending_purchases WHERE discord_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT 1',
+      [discordId, 'pending']
+    );
     return result.rows[0] || null;
   } finally {
     client.release();
@@ -147,7 +195,10 @@ async function getPendingPurchaseByDiscordId(discordId) {
 async function getMostRecentPendingPurchase() {
   const client = await pool.connect();
   try {
-    const result = await client.query('SELECT * FROM pending_purchases ORDER BY created_at DESC LIMIT 1');
+    const result = await client.query(
+      'SELECT * FROM pending_purchases WHERE status = $1 ORDER BY created_at DESC LIMIT 1',
+      ['pending']
+    );
     return result.rows[0] || null;
   } finally {
     client.release();
@@ -157,32 +208,39 @@ async function getMostRecentPendingPurchase() {
 async function markPurchaseCompleted(sessionId, licenseKey) {
   const client = await pool.connect();
   try {
-    await client.query('UPDATE pending_purchases SET status = $1 WHERE session_id = $2', ['completed', sessionId]);
+    await client.query(
+      'UPDATE pending_purchases SET status = $1, license_key = $2, updated_at = now() WHERE session_id = $3',
+      ['completed', licenseKey, sessionId]
+    );
   } finally {
     client.release();
   }
 }
 
-// ---------- License stock helpers ----------
-async function getAvailableKey(productType) {
+async function getAvailableLicenseKey(productType) {
   const client = await pool.connect();
   try {
     const result = await client.query(
-      'SELECT license_key FROM license_stock WHERE product_type = $1 AND claimed = FALSE LIMIT 1',
-      [productType]
+      `SELECT * FROM license_stock 
+       WHERE product_type = $1 AND status = $2 AND claimed = FALSE 
+       ORDER BY created_at ASC LIMIT 1`,
+      [productType, 'available']
     );
-    return result.rows[0]?.license_key || null;
+    return result.rows[0] || null;
   } finally {
     client.release();
   }
 }
 
-async function claimKey(licenseKey, discordId) {
+async function claimLicenseKey(licenseKeyId, discordId, customerEmail = null) {
   const client = await pool.connect();
   try {
     await client.query(
-      'UPDATE license_stock SET claimed = TRUE, claimed_by = $1, claimed_at = CURRENT_TIMESTAMP WHERE license_key = $2',
-      [discordId, licenseKey]
+      `UPDATE license_stock 
+       SET claimed = TRUE, claimed_by = $1, claimed_at = now(), 
+           customer_discord_id = $1, customer_email = $2, status = $3, updated_at = now()
+       WHERE id = $4`,
+      [discordId, customerEmail, 'assigned', licenseKeyId]
     );
   } finally {
     client.release();
@@ -192,13 +250,16 @@ async function claimKey(licenseKey, discordId) {
 async function assignLicenseToUser(discordId, discordUsername, licenseKey, productType) {
   const product = PRODUCTS[productType];
   const now = new Date();
-  const expiresAt = product.duration === -1 ? null : new Date(now.getTime() + product.duration * 24 * 60 * 60 * 1000);
+  const expiresAt = product.duration === -1 
+    ? null 
+    : new Date(now.getTime() + product.duration * 24 * 60 * 60 * 1000);
 
   const client = await pool.connect();
   try {
     await client.query(
       `INSERT INTO user_licenses (discord_id, discord_username, license_key, product_type, product_name, expires_at, is_lifetime)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (license_key) DO NOTHING`,
       [discordId, discordUsername, licenseKey, productType, product.name, expiresAt, product.duration === -1]
     );
   } finally {
@@ -206,263 +267,124 @@ async function assignLicenseToUser(discordId, discordUsername, licenseKey, produ
   }
 }
 
-// ---------- Discord messaging / admin notifications ----------
-async function sendLicenseDM(discordId, licenseKey, product) {
+async function logPurchase(licenseKey, customerEmail, discordId, discordUsername, productType) {
+  const client = await pool.connect();
   try {
-    const user = await discordClient.users.fetch(discordId);
+    await client.query(
+      `INSERT INTO purchase_log (license_key, customer_email, customer_discord_id, customer_username, product_type, payment_method)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [licenseKey, customerEmail, discordId, discordUsername, productType, 'polar']
+    );
+  } finally {
+    client.release();
+  }
+}
 
+async function addLicenseKeyToStock(licenseKey, productType = 'swimhub') {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `INSERT INTO license_stock (license_key, product_type, status, created_at, updated_at)
+       VALUES ($1, $2, $3, now(), now())
+       ON CONFLICT (license_key) DO NOTHING
+       RETURNING *`,
+      [licenseKey, productType, 'available']
+    );
+    return result. rows[0] || null;
+  } finally {
+    client.release();
+  }
+}
+
+async function getStockCount() {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'SELECT COUNT(*) as count FROM license_stock WHERE status = $1 AND claimed = FALSE',
+      ['available']
+    );
+    return parseInt(result.rows[0].count) || 0;
+  } finally {
+    client.release();
+  }
+}
+
+async function getLicenseStats() {
+  const client = await pool.connect();
+  try {
+    const result = await client. query(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'available' AND claimed = FALSE THEN 1 ELSE 0 END) as available,
+        SUM(CASE WHEN status = 'assigned' OR claimed = TRUE THEN 1 ELSE 0 END) as used
+      FROM license_stock
+    `);
+    return result.rows[0] || { total: 0, available: 0, used: 0 };
+  } finally {
+    client.release();
+  }
+}
+
+// ---------- WEBHOOK HANDLERS ----------
+
+async function sendLicenseDM(discordId, licenseKey, product) {
+  if (!discordClient || !discordId) return false;
+  
+  try {
+    const user = await discordClient.users. fetch(discordId);
     const embed = new EmbedBuilder()
-      .setColor(0x00d4ff)
-      .setTitle('🎉 SwimHub License Key')
+      .setColor('#10b981')
+      .setTitle('🎉 Your License Key is Ready!')
       .setDescription('Thank you for your purchase!')
       .addFields(
-        { name: '📦 Product', value: product.name, inline: true },
-        { name: '⏰ Type', value: product.duration === -1 ? 'Lifetime' : `${product.duration} Days`, inline: true },
-        { name: '\u200B', value: '\u200B' },
-        { name: '🔑 Your License Key', value: `\`\`\`${licenseKey}\`\`\`` }
+        { name: 'Product', value: product.name, inline: true },
+        { name:  'Duration', value: product.duration === -1 ? 'Lifetime' : `${product.duration} days`, inline: true },
+        { name: 'License Key', value: `\`${licenseKey}\``, inline: false },
+        { name: 'How to Activate', value: 'Use the license key in our Discord server or website', inline: false }
       )
-      .setFooter({ text: 'SwimHub • Keep this key safe!' })
+      .setFooter({ text: 'SwimHub License System' })
       .setTimestamp();
 
     await user.send({ embeds: [embed] });
     return true;
   } catch (error) {
-    console.error('Failed to send DM to user:', error);
+    console.error('Failed to send license DM:', error. message);
     return false;
   }
 }
 
-async function logPurchase(discordId, username, licenseKey, productType, dmSuccess) {
-  try {
-    const admin = await discordClient.users.fetch(process.env.ADMIN_USER_ID);
-    const product = PRODUCTS[productType];
+async function sendAdminNotification(customerInfo, licenseKey, product) {
+  if (!discordClient || !process.env.ADMIN_DISCORD_ID) return;
 
-    const embed = new EmbedBuilder()
-      .setColor(dmSuccess ? 0x10b981 : 0xf59e0b)
-      .setTitle(dmSuccess ? '💰 New Purchase!' : '💰 New Purchase - ⚠️ MANUAL DELIVERY NEEDED')
-      .setDescription(dmSuccess ? 'License delivered successfully!' : '**User has DMs closed. Please deliver the key manually.**')
+  try {
+    const admin = await discordClient.users. fetch(process.env.ADMIN_DISCORD_ID);
+    const purchaseEmbed = new EmbedBuilder()
+      .setColor('#667eea')
+      .setTitle('📦 New Purchase Notification')
+      .setDescription('A new customer has completed a purchase')
       .addFields(
+        { name: 'Customer', value: customerInfo.discord_username || 'Unknown', inline: true },
+        { name: 'Discord ID', value: customerInfo.discord_id || 'N/A', inline: true },
+        { name: 'Email', value: customerInfo.email || 'N/A', inline:  false },
         { name: 'Product', value: product.name, inline: true },
-        { name: 'User', value: `<@${discordId}>`, inline: true },
-        { name: 'Username', value: username, inline: true },
-        { name: 'User ID', value: `\`${discordId}\``, inline: true },
-        { name: 'Delivery Status', value: dmSuccess ? '✅ Sent to DMs' : '❌ Failed - Manual delivery required', inline: true },
-        { name: '🔑 License Key', value: `\`${licenseKey}\``, inline: false }
+        { name: 'Duration', value: product.duration === -1 ? 'Lifetime' : `${product.duration} days`, inline: true },
+        { name: 'License Key', value: `\`${licenseKey}\``, inline: false },
+        { name: 'Remaining Stock', value: `${await getStockCount()} keys available`, inline: false }
       )
+      .setFooter({ text: 'SwimHub Admin Dashboard' })
       .setTimestamp();
 
-    await admin.send({ embeds: [embed] });
+    await admin.send({ embeds: [purchaseEmbed] });
+    console.log('✅ Admin notification sent');
   } catch (error) {
-    console.error('Failed to log purchase:', error);
+    console.error('Failed to send admin notification:', error.message);
   }
 }
 
-async function notifyOutOfStock(productType, discordId) {
-  try {
-    const admin = await discordClient.users.fetch(process.env.ADMIN_USER_ID);
-    const product = PRODUCTS[productType];
-
-    const embed = new EmbedBuilder()
-      .setColor(0xef4444)
-      .setTitle('⚠️ OUT OF STOCK!')
-      .setDescription(`Someone tried to purchase but we're out of keys!`)
-      .addFields(
-        { name: 'Product', value: product.name, inline: true },
-        { name: 'User ID', value: discordId ? `<@${discordId}>` : 'Unknown', inline: true }
-      )
-      .setTimestamp();
-
-    await admin.send({ embeds: [embed] });
-  } catch (error) {
-    console.error('Failed to notify out of stock:', error);
-  }
-}
-
-async function notifyAdminSessionNotFound(customerEmail, sessionId, order) {
-  try {
-    const admin = await discordClient.users.fetch(process.env.ADMIN_USER_ID);
-
-    const embed = new EmbedBuilder()
-      .setColor(0xef4444)
-      .setTitle('⚠️ Payment Received - Session Not Found!')
-      .setDescription('A payment was received but the session could not be found. You may need to manually verify and deliver.')
-      .addFields(
-        { name: 'Customer Email', value: customerEmail || 'Not provided', inline: true },
-        { name: 'Session ID Attempted', value: sessionId || 'None', inline: true },
-        { name: 'Order Number', value: order?.number || order?.id || 'Unknown', inline: true }
-      )
-      .setTimestamp();
-
-    await admin.send({ embeds: [embed] });
-  } catch (error) {
-    console.error('Failed to notify about session not found:', error);
-  }
-}
-
-// ---------- Simple web routes (OAuth flow + session) ----------
-function getWebsiteUrl() {
-  return process.env.WEBSITE_URL || `http://localhost:${PORT}`;
-}
-
-app.get('/auth/discord', (req, res) => {
-  const { product } = req.query;
-  if (!product || !PRODUCTS[product]) {
-    return res.status(400).json({ error: 'Invalid product' });
-  }
-  const state = Buffer.from(JSON.stringify({ product, timestamp: Date.now() })).toString('base64');
-  const redirectUri = `${getWebsiteUrl()}/auth/discord/callback`;
-
-  const params = new URLSearchParams({
-    client_id: process.env.DISCORD_CLIENT_ID,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: 'identify email guilds.join',
-    state: state
-  });
-
-  res.redirect(`https://discord.com/api/oauth2/authorize?${params}`);
-});
-
-app.get('/auth/discord/callback', async (req, res) => {
-  const { code, state } = req.query;
-  if (!code) {
-    return res.redirect('/purchase?error=auth_failed');
-  }
-  try {
-    const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-    const { product } = stateData;
-    const redirectUri = `${getWebsiteUrl()}/auth/discord/callback`;
-
-    const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: process.env.DISCORD_CLIENT_ID,
-        client_secret: process.env.DISCORD_CLIENT_SECRET,
-        grant_type: 'authorization_code',
-        code: code,
-        redirect_uri: redirectUri
-      })
-    });
-
-    const tokens = await tokenResponse.json();
-    if (!tokens.access_token) throw new Error('Failed to get access token');
-
-    const userResponse = await fetch('https://discord.com/api/users/@me', {
-      headers: { Authorization: `Bearer ${tokens.access_token}` }
-    });
-    const user = await userResponse.json();
-
-    // try to add to guild
-    try {
-      await fetch(`https://discord.com/api/guilds/${process.env.DISCORD_GUILD_ID}/members/${user.id}`, {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ access_token: tokens.access_token })
-      });
-    } catch (e) {
-      console.log('User may already be in server');
-    }
-
-    const sessionId = uuidv4();
-    await savePendingPurchase(sessionId, {
-      discordId: user.id,
-      discordUsername: user.username,
-      email: user.email,
-      product: product,
-      accessToken: tokens.access_token
-    });
-
-    // Redirect to checkout.html on your site (use getWebsiteUrl() if frontend is separate)
-    res.redirect(`/checkout?session=${sessionId}&product=${product}&user=${encodeURIComponent(user.username)}`);
-  } catch (error) {
-    console.error('OAuth error:', error);
-    res.redirect('/purchase?error=auth_failed');
-  }
-});
-
-app.get('/api/session/:sessionId', async (req, res) => {
-  const session = await getPendingPurchase(req.params.sessionId);
-  if (!session) return res.status(404).json({ error: 'Session not found' });
-  res.json({
-    discordUsername: session.discord_username,
-    product: session.product,
-    productName: PRODUCTS[session.product]?.name
-  });
-});
-
-app.get('/api/checkout-url/:sessionId', async (req, res) => {
-  const session = await getPendingPurchase(req.params.sessionId);
-  if (!session) return res.status(404).json({ error: 'Session not found' });
-
-  const productIds = {
-    'regular-monthly': process.env.POLAR_PRODUCT_REGULAR_MONTHLY,
-    'regular-lifetime': process.env.POLAR_PRODUCT_REGULAR_LIFETIME,
-    'master-monthly': process.env.POLAR_PRODUCT_MASTER_MONTHLY,
-    'master-lifetime': process.env.POLAR_PRODUCT_MASTER_LIFETIME,
-    'nightly': process.env.POLAR_PRODUCT_NIGHTLY
-  };
-
-  const productId = productIds[session.product];
-  if (process.env.POLAR_ACCESS_TOKEN && productId) {
-    try {
-      const response = await fetch('https://api.polar.sh/v1/checkouts', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.POLAR_ACCESS_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          products: [productId],
-          metadata: { sessionId: req.params.sessionId, discordId: session.discord_id, discordUsername: session.discord_username },
-          customer_email: session.email || undefined,
-          success_url: `${process.env.WEBSITE_URL}/success.html?session=${req.params.sessionId}`
-        })
-      });
-      if (response.ok) {
-        const checkout = await response.json();
-        console.log('Created Polar checkout session:', checkout.id);
-        return res.json({ checkoutUrl: checkout.url, checkoutId: checkout.id, embedEnabled: true });
-      } else {
-        const errorData = await response.json();
-        console.error('Polar API error:', errorData);
-      }
-    } catch (error) {
-      console.error('Failed to create Polar checkout:', error);
-    }
-  }
-
-  const checkoutUrls = {
-    'regular-monthly': process.env.POLAR_URL_REGULAR_MONTHLY || process.env.FUNGIES_URL_REGULAR_MONTHLY,
-    'regular-lifetime': process.env.POLAR_URL_REGULAR_LIFETIME || process.env.FUNGIES_URL_REGULAR_LIFETIME,
-    'master-monthly': process.env.POLAR_URL_MASTER_MONTHLY || process.env.FUNGIES_URL_MASTER_MONTHLY,
-    'master-lifetime': process.env.POLAR_URL_MASTER_LIFETIME || process.env.FUNGIES_URL_MASTER_LIFETIME,
-    'nightly': process.env.POLAR_URL_NIGHTLY || process.env.FUNGIES_URL_NIGHTLY
-  };
-
-  const baseUrl = checkoutUrls[session.product];
-  if (!baseUrl) return res.status(400).json({ error: 'Product not configured' });
-
-  const metadata = { sessionId: req.params.sessionId, discordId: session.discord_id, discordUsername: session.discord_username };
-  const checkoutUrl = `${baseUrl}?metadata=${encodeURIComponent(JSON.stringify(metadata))}`;
-
-  res.json({ checkoutUrl, embedEnabled: true });
-});
-
-app.get('/api/payment-status/:sessionId', async (req, res) => {
-  const session = await getPendingPurchase(req.params.sessionId);
-  if (!session) return res.status(404).json({ status: 'not_found' });
-  res.json({ status: session.status || 'pending', product: session.product, productName: PRODUCTS[session.product]?.name });
-});
-
-// ---------- Shared processing (used by webhooks and manual calls) ----------
 async function processCheckoutPayload(payload) {
   const data = payload.data || payload;
   const customer = data.customer || data.user || {};
-  let metadata = data.metadata || data.custom_data || data.customData || {};
+  let metadata = data.metadata || data. custom_data || data.customData || {};
 
   if (typeof metadata === 'string') {
     try { metadata = JSON.parse(metadata); } catch (e) { metadata = {}; }
@@ -471,11 +393,11 @@ async function processCheckoutPayload(payload) {
   const customerEmail = customer.email || data.email;
   let session = null;
 
-  if (metadata?.sessionId) {
-    session = await getPendingPurchase(metadata.sessionId);
+  if (metadata?. sessionId) {
+    session = await getPendingPurchase(metadata. sessionId);
   }
-  if (!session && metadata?.discordId) {
-    session = await getPendingPurchaseByDiscordId(metadata.discordId);
+  if (! session && metadata?.discordId) {
+    session = await getPendingPurchaseByDiscordId(metadata. discordId);
   }
   if (!session && customerEmail) {
     session = await getPendingPurchaseByEmail(customerEmail);
@@ -484,132 +406,105 @@ async function processCheckoutPayload(payload) {
     session = await getMostRecentPendingPurchase();
   }
 
-  if (!session) {
-    console.error('No pending session found for customer:', customerEmail);
-    await notifyAdminSessionNotFound(customerEmail, metadata?.sessionId || null, data);
-    return { success: false, reason: 'session_not_found' };
+  if (! session) {
+    console.error('❌ No pending session found for customer:', customerEmail);
+    return { success:  false, reason: 'no_pending_session' };
   }
 
-  console.log('Found session:', session);
-
-  const licenseKey = await getAvailableKey(session.product);
-  if (!licenseKey) {
-    console.error('No keys in stock for:', session.product);
-    await notifyOutOfStock(session.product, session.discord_id);
-    return { success: false, reason: 'out_of_stock' };
+  // Get available license key
+  const availableKey = await getAvailableLicenseKey(session.product);
+  if (!availableKey) {
+    console.error('❌ No available license keys in stock for:', session.product);
+    return { success: false, reason: 'no_available_keys' };
   }
 
-  await claimKey(licenseKey, session.discord_id);
+  const licenseKey = availableKey. license_key;
+
+  // Claim the license
+  await claimLicenseKey(availableKey.id, session.discord_id, session.email);
+  
+  // Assign to user
   await assignLicenseToUser(session.discord_id, session.discord_username, licenseKey, session.product);
+  
+  // Mark purchase as completed
   await markPurchaseCompleted(session.session_id, licenseKey);
+  
+  // Log the purchase
+  await logPurchase(licenseKey, session. email, session.discord_id, session.discord_username, session. product);
 
+  // Send license to user
   const dmSuccess = await sendLicenseDM(session.discord_id, licenseKey, PRODUCTS[session.product]);
-  await logPurchase(session.discord_id, session.discord_username, licenseKey, session.product, dmSuccess);
+  
+  // Send admin notification
+  await sendAdminNotification(session, licenseKey, PRODUCTS[session.product]);
 
   console.log('✅ License delivered:', licenseKey, 'to', session.discord_username);
-  return { success: true, licenseKey, dmSuccess };
+  return { success:  true, licenseKey, dmSuccess };
 }
 
-// ---------- Webhook processing (Polar) ----------
-const processedWebhooks = new Set();
+// ---------- ROUTES ----------
 
-function computeHmacBase64(secret, payloadString) {
-  return crypto.createHmac('sha256', secret).update(payloadString).digest('base64');
-}
+app.get('/checkout', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'checkout.html'));
+});
 
+app.get('/checkout. html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'checkout.html'));
+});
+
+// Polar webhook
 app.post('/webhook/polar', async (req, res) => {
   try {
     console.log('=== POLAR WEBHOOK RECEIVED ===');
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
-    console.log('Body (parsed):', JSON.stringify(req.body && typeof req.body === 'object' ? { type: req.body.type } : req.body));
-
-    const signatureHeader = (req.headers['webhook-signature'] || req.headers['x-polar-signature'] || '');
+    
+    const signatureHeader = req.headers['webhook-signature'] || '';
     const webhookSecret = (process.env.POLAR_WEBHOOK_SECRET || '').trim();
     const skipSig = process.env.POLAR_SKIP_SIGNATURE === 'true';
 
-    if (!webhookSecret && !skipSig) {
-      console.warn('⚠️ POLAR_WEBHOOK_SECRET not set and POLAR_SKIP_SIGNATURE not enabled — requests will be rejected.');
-    }
+    let signatureValid = skipSig;
 
-    if (req.rawBody) {
-      const rawPreview = req.rawBody.toString('utf8').slice(0, 600);
-      console.log('RAW BODY preview (first 600 chars):', rawPreview);
-    }
-
-    let signatureValid = false;
-    const debugCandidates = [];
-
-    if (!skipSig && webhookSecret && signatureHeader) {
+    if (!signatureValid && webhookSecret && signatureHeader) {
       const parts = signatureHeader.split(',');
-      const signatureValue = parts.length > 1 ? parts[1].trim() : (parts[0] || '').trim();
-      const timestamp = (req.headers['webhook-timestamp'] || req.headers['x-polar-timestamp'] || '').toString();
-      const raw = (req.rawBody && req.rawBody.length) ? req.rawBody.toString('utf8') : (JSON.stringify(req.body || {}));
-      const jsonStringified = JSON.stringify(req.body || {});
+      const signatureValue = parts. length > 1 ? parts[1].trim() : parts[0].trim();
+      const timestamp = req.headers['webhook-timestamp'] || '';
+      const raw = req.rawBody ?  req.rawBody. toString('utf8') : JSON.stringify(req.body);
 
-      const candidates = [];
-      if (timestamp) candidates.push({ label: 'timestamp + raw', payload: `${timestamp}.${raw}` });
-      if (timestamp) candidates.push({ label: 'timestamp + jsonStringified', payload: `${timestamp}.${jsonStringified}` });
-      candidates.push({ label: 'raw', payload: raw });
-      candidates.push({ label: 'jsonStringified', payload: jsonStringified });
-      candidates.push({ label: 'raw.trim()', payload: raw.trim() });
-      if (timestamp) candidates.push({ label: 'timestamp + raw.trim()', payload: `${timestamp}.${raw.trim()}` });
+      const candidates = [
+        { label: 'timestamp + raw', payload: `${timestamp}. ${raw}` },
+        { label: 'raw', payload: raw }
+      ];
 
       for (const c of candidates) {
-        const h = computeHmacBase64(webhookSecret, c.payload);
-        debugCandidates.push({ label: c.label, computed: h });
+        const h = crypto.createHmac('sha256', webhookSecret).update(c.payload).digest('base64');
         if (h === signatureValue) {
           signatureValid = true;
-          console.log(`✅ Polar signature matched using candidate: ${c.label}`);
           break;
         }
-      }
-
-      console.log('Polar signature header:', signatureHeader);
-      console.log('Extracted signature value:', parts.length > 1 ? parts[1].trim() : (parts[0] || '').trim());
-      console.log('Webhook timestamp:', (req.headers['webhook-timestamp'] || req.headers['x-polar-timestamp'] || '') || '(none)');
-      console.log('Computed candidate digests (base64):', JSON.stringify(debugCandidates, null, 2));
-    } else {
-      if (skipSig) {
-        signatureValid = true;
-        console.warn('⚠️ POLAR signature verification SKIPPED (POLAR_SKIP_SIGNATURE=true).');
-      } else if (!webhookSecret) {
-        signatureValid = false;
-        console.warn('⚠️ POLAR_WEBHOOK_SECRET empty and verification not skipped - rejecting by default.');
-      } else {
-        signatureValid = false;
-        console.warn('⚠️ No Polar signature header present in request.');
       }
     }
 
     if (!signatureValid) {
-      console.error('Invalid Polar webhook signature - rejecting webhook.');
+      console.error('Invalid Polar webhook signature');
       return res.status(401).json({ error: 'Invalid signature' });
     }
-    console.log('✅ Polar signature verified (or skipped)');
 
     const event = req.body;
-    const eventId = event.id || event.event_id || `${Date.now()}-${Math.random()}`;
+    const eventId = event.id || `${Date.now()}-${Math.random()}`;
 
     if (processedWebhooks.has(eventId)) {
-      console.log('⚠️ Duplicate webhook ignored:', eventId);
+      console.log('⚠️ Duplicate webhook ignored');
       return res.status(200).json({ received: true, duplicate: true });
     }
-    processedWebhooks.add(eventId);
-    if (processedWebhooks.size > 2000) {
-      const idsArray = Array.from(processedWebhooks);
-      for (let i = 0; i < 1000; i++) processedWebhooks.delete(idsArray[i]);
-    }
 
-    console.log('Event type:', event.type);
-    const successEvents = ['checkout.completed', 'order.created', 'order.paid', 'payment.success', 'payment_success', 'checkout.updated'];
+    processedWebhooks.add(eventId);
+
+    const successEvents = ['checkout. completed', 'order.created', 'checkout.updated', 'payment.success'];
 
     if (successEvents.includes(event.type)) {
       const result = await processCheckoutPayload(event);
-      if (!result.success) {
-        return res.status(200).json({ received: true, error: result.reason || 'processing_failed' });
+      if (! result.success) {
+        return res.status(200).json({ received: true, error: result.reason });
       }
-    } else {
-      console.log('Event type not in success list, ignoring for license delivery.');
     }
 
     return res.status(200).json({ received: true });
@@ -619,192 +514,177 @@ app.post('/webhook/polar', async (req, res) => {
   }
 });
 
-// ---------- Fungies webhook (kept for backward compatibility) ----------
-app.post('/webhook/fungies', async (req, res) => {
-  try {
-    console.log('=== FUNGIES WEBHOOK RECEIVED ===');
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+// License API endpoints
+app.post('/api/licenses/add', async (req, res) => {
+  const { keys, token } = req.body;
 
-    const signature = req.headers['x-fngs-signature'];
-    if (process.env.FUNGIES_WEBHOOK_SECRET && signature) {
-      const hmac = crypto.createHmac('sha256', process.env.FUNGIES_WEBHOOK_SECRET);
-      const expectedSignature = `sha256_${hmac.update(req.rawBody || Buffer.from(JSON.stringify(req.body))).digest('hex')}`;
-
-      if (signature !== expectedSignature) {
-        console.error('Invalid Fungies webhook signature');
-        console.error('Expected:', expectedSignature);
-        console.error('Received:', signature);
-        return res.status(401).json({ error: 'Invalid signature' });
-      }
-      console.log('✅ Fungies signature verified');
-    }
-
-    const event = req.body;
-    console.log('Event type:', event.type);
-
-    if (event.type === 'payment_success') {
-      const { items, order, customer } = event.data;
-      const customerEmail = customer?.email;
-
-      let session = null;
-      let customData = null;
-      if (order?.customData) customData = order.customData;
-      else if (order?.custom_data) customData = order.custom_data;
-      else if (event.data?.customData) customData = event.data.customData;
-      else if (event.data?.custom_data) customData = event.data.custom_data;
-      else if (items?.[0]?.customData) customData = items[0].customData;
-      else if (items?.[0]?.custom_data) customData = items[0].custom_data;
-
-      if (typeof customData === 'string') {
-        try { customData = JSON.parse(customData); } catch (e) { customData = null; }
-      }
-
-      if (customData?.sessionId) session = await getPendingPurchase(customData.sessionId);
-      if (!session && customData?.discordId) session = await getPendingPurchaseByDiscordId(customData.discordId);
-      if (!session && customerEmail) session = await getPendingPurchaseByEmail(customerEmail);
-      if (!session) session = await getMostRecentPendingPurchase();
-
-      if (!session) {
-        console.error('No pending session found for Fungies customer:', customerEmail);
-        await notifyAdminSessionNotFound(customerEmail, customData?.sessionId || null, order);
-        return res.status(200).json({ received: true, error: 'Session not found' });
-      }
-
-      const licenseKey = await getAvailableKey(session.product);
-      if (!licenseKey) {
-        console.error('No keys in stock for:', session.product);
-        await notifyOutOfStock(session.product, session.discord_id);
-        return res.status(200).json({ received: true, error: 'Out of stock' });
-      }
-
-      await claimKey(licenseKey, session.discord_id);
-      await assignLicenseToUser(session.discord_id, session.discord_username, licenseKey, session.product);
-      await markPurchaseCompleted(session.session_id, licenseKey);
-
-      const dmSuccess = await sendLicenseDM(session.discord_id, licenseKey, PRODUCTS[session.product]);
-      await logPurchase(session.discord_id, session.discord_username, licenseKey, session.product, dmSuccess);
-
-      console.log('✅ Fungies: License delivered:', licenseKey, 'to', session.discord_username);
-    }
-
-    return res.status(200).json({ received: true });
-  } catch (error) {
-    console.error('Fungies webhook error:', error);
-    return res.status(200).json({ received: true, error: error.message });
+  if (!token || token !== process.env. INTERNAL_PROCESS_TOKEN) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
-});
 
-// ---------- Manual/internal processing endpoint (useful for free checkouts / replays) ----------
-app.post('/internal/process-checkout', async (req, res) => {
+  if (!Array.isArray(keys) || keys.length === 0) {
+    return res.status(400).json({ error: 'Keys must be a non-empty array' });
+  }
+
   try {
-    const { checkoutId, sessionId } = req.body || {};
-    const token = req.headers['x-internal-token'] || req.query.token;
-    if (!process.env.INTERNAL_PROCESS_TOKEN) {
-      return res.status(403).json({ error: 'Internal processing disabled on server (no token configured)' });
-    }
-    if (!token || token !== process.env.INTERNAL_PROCESS_TOKEN) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-    if (!checkoutId && !sessionId) return res.status(400).json({ error: 'checkoutId or sessionId required' });
-
-    if (!checkoutId && sessionId) {
-      const session = await getPendingPurchase(sessionId);
-      if (!session) return res.status(404).json({ error: 'Session not found' });
-      const synthetic = { type: 'internal.manual', data: { metadata: { sessionId } } };
-      const result = await processCheckoutPayload(synthetic);
-      return res.json(result);
+    for (const key of keys) {
+      await addLicenseKeyToStock(key. trim().toUpperCase(), 'swimhub');
     }
 
-    if (!process.env.POLAR_ACCESS_TOKEN) return res.status(500).json({ error: 'POLAR_ACCESS_TOKEN not configured' });
-    const resp = await fetch(`https://api.polar.sh/v1/checkouts/${checkoutId}`, {
-      headers: { Authorization: `Bearer ${process.env.POLAR_ACCESS_TOKEN}` }
+    const stock = await getStockCount();
+    console.log(`✅ Added ${keys.length} license keys.  Total available: ${stock}`);
+    
+    res.json({
+      success: true,
+      count: keys.length,
+      stock
     });
-    if (!resp.ok) {
-      const txt = await resp.text();
-      return res.status(500).json({ error: 'Failed to fetch checkout', status: resp.status, body: txt });
-    }
-    const checkout = await resp.json();
-    const fakeEvent = { type: checkout?.status || 'checkout.fetched', data: checkout };
-    const result = await processCheckoutPayload(fakeEvent);
-    return res.json(result);
-  } catch (err) {
-    console.error('internal/process-checkout error:', err);
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-// ---------- Slash commands / interaction handlers (register basic commands) ----------
+app.get('/api/licenses/stock', async (req, res) => {
+  try {
+    const stats = await getLicenseStats();
+    res.json({ success: true, ... stats });
+  } catch (error) {
+    res.status(500).json({ error: error. message });
+  }
+});
+
+// Slash commands
 const commands = [
-  new SlashCommandBuilder().setName('license').setDescription('View your SwimHub licenses'),
-  new SlashCommandBuilder().setName('addkey').setDescription('Add license key(s) to stock').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  new SlashCommandBuilder().setName('stock').setDescription('Check license key stock').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
-    .setName('givekey')
-    .setDescription('Give a license key to a user')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addUserOption(option => option.setName('user').setDescription('The user to give the key to').setRequired(true))
-    .addStringOption(option => option.setName('product').setDescription('Product type').setRequired(true)
-      .addChoices(
-        { name: 'Regular Monthly', value: 'regular-monthly' },
-        { name: 'Regular Lifetime', value: 'regular-lifetime' },
-        { name: 'Master Monthly', value: 'master-monthly' },
-        { name: 'Master Lifetime', value: 'master-lifetime' },
-        { name: 'Nightly', value: 'nightly' }
-      ))
+    .setName('addlicense')
+    .setDescription('Add license keys to stock')
+    .addStringOption(opt => opt
+      .setName('keys')
+      .setDescription('Comma-separated license keys')
+      .setRequired(true)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits. Administrator),
+
+  new SlashCommandBuilder()
+    .setName('stock')
+    .setDescription('Check license stock status')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName('license')
+    .setDescription('View your license information')
 ].map(c => c.toJSON());
 
 async function registerCommands() {
-  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
+  const rest = new REST({ version: '10' }).setToken(process.env. DISCORD_BOT_TOKEN);
   try {
-    console.log('Registering slash commands.');
-    await rest.put(Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.DISCORD_GUILD_ID), { body: commands });
-    console.log('✅ Slash commands registered!');
-  } catch (err) {
-    console.error('Failed to register commands:', err);
+    console.log('Registering slash commands...');
+    await rest.put(
+      Routes.applicationGuildCommands(process.env. DISCORD_CLIENT_ID, process.env. DISCORD_GUILD_ID),
+      { body: commands }
+    );
+    console.log('✅ Commands registered');
+  } catch (error) {
+    console.error('Failed to register commands:', error);
   }
 }
 
+// Command handlers
 discordClient.on('interactionCreate', async (interaction) => {
-  if (interaction.isCommand()) {
-    const name = interaction.commandName;
-    if (name === 'license') {
-      await interaction.reply({ content: 'Not implemented in this snippet', ephemeral: true });
-    } else if (name === 'givekey') {
-      const user = interaction.options.getUser('user');
-      const product = interaction.options.getString('product');
-      const key = await getAvailableKey(product);
-      if (!key) return interaction.reply({ content: `No keys for ${product}`, ephemeral: true });
-      await claimKey(key, user.id);
-      await assignLicenseToUser(user.id, user.username, key, product);
-      await sendLicenseDM(user.id, key, PRODUCTS[product]);
-      await interaction.reply({ content: `Gave ${PRODUCTS[product].name} to <@${user.id}>`, ephemeral: true });
-    } else {
-      await interaction.reply({ content: 'Unknown command', ephemeral: true });
+  if (! interaction.isCommand()) return;
+
+  try {
+    if (interaction.commandName === 'addlicense') {
+      const isAdmin = interaction.member?. permissions.has(PermissionFlagsBits.Administrator);
+      if (!isAdmin) {
+        return interaction.reply({ content: '❌ Admin only', ephemeral: true });
+      }
+
+      const keysInput = interaction.options.getString('keys');
+      const keys = keysInput.split(',').map(k => k.trim()).filter(k => k);
+
+      if (keys.length === 0) {
+        return interaction. reply({ content: '❌ No valid keys provided', ephemeral: true });
+      }
+
+      await interaction. deferReply({ ephemeral:  true });
+
+      for (const key of keys) {
+        await addLicenseKeyToStock(key. toUpperCase(), 'swimhub');
+      }
+
+      const stock = await getStockCount();
+
+      const embed = new EmbedBuilder()
+        .setColor('#10b981')
+        .setTitle('✅ Keys Added')
+        .addFields(
+          { name: 'Keys Added', value: keys.length. toString(), inline: true },
+          { name: 'Total Stock', value: stock. toString(), inline: true }
+        );
+
+      await interaction.editReply({ embeds: [embed] });
+    } 
+    else if (interaction.commandName === 'stock') {
+      const isAdmin = interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
+      if (!isAdmin) {
+        return interaction.reply({ content: '❌ Admin only', ephemeral: true });
+      }
+
+      const stats = await getLicenseStats();
+
+      const embed = new EmbedBuilder()
+        .setColor('#667eea')
+        .setTitle('📊 License Stock')
+        .addFields(
+          { name: 'Available', value: stats.available?. toString() || '0', inline: true },
+          { name: 'Assigned', value: stats. used?.toString() || '0', inline: true },
+          { name:  'Total', value: stats. total?.toString() || '0', inline: true }
+        );
+
+      interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+    else if (interaction. commandName === 'license') {
+      await interaction.reply({
+        content: 'Check your Discord DMs for your license key information',
+        ephemeral: true
+      });
+    }
+  } catch (error) {
+    console.error('Command error:', error);
+    if (! interaction.replied) {
+      interaction.reply({ content: '❌ Command failed', ephemeral: true });
     }
   }
 });
 
-// ---------- Start ----------
 discordClient.once('ready', async () => {
-  console.log(`✅ Bot logged in as ${discordClient.user.tag}`);
+  console.log(`✅ Bot logged in as ${discordClient.user. tag}`);
   await registerCommands();
 });
 
+// Start server
 async function start() {
-  await initDatabase();
-  app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
-  await discordClient.login(process.env.DISCORD_BOT_TOKEN);
-}
-start().catch(console.error);
-
-// Periodic cleanup (async callback)
-setInterval(async () => {
-  const client = await pool.connect();
   try {
-    await client.query("DELETE FROM pending_purchases WHERE created_at < NOW() - INTERVAL '1 hour'");
-  } catch (err) {
-    console.error('Periodic cleanup error:', err);
-  } finally {
-    client.release();
+    await initDatabase();
+    
+    app.listen(PORT, () => {
+      console. log(`✅ Server running on port ${PORT}`);
+    });
+
+    await discordClient.login(process. env.DISCORD_BOT_TOKEN);
+  } catch (error) {
+    console.error('Startup error:', error);
+    process.exit(1);
   }
-}, 60 * 60 * 1000);
+}
+
+start();
+
+// Cleanup
+process.on('SIGINT', () => {
+  console.log('Shutting down.. .');
+  discordClient.destroy();
+  pool.end();
+  process.exit(0);
+});
