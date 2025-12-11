@@ -662,6 +662,177 @@ discordClient.once('ready', async () => {
   console.log(`✅ Bot logged in as ${discordClient.user. tag}`);
   await registerCommands();
 });
+// ---------- DISCORD OAUTH ROUTES ----------
+
+app.get('/auth/discord', (req, res) => {
+  const { product } = req.query;
+  
+  if (!product || ! PRODUCTS[product]) {
+    return res.status(400).json({ error: 'Invalid product' });
+  }
+
+  const sessionId = uuidv4();
+  const clientId = process.env.DISCORD_CLIENT_ID;
+  const redirectUri = encodeURIComponent(`${process.env.WEBSITE_URL}/auth/discord/callback`);
+  const scope = encodeURIComponent('identify email guilds. join');
+  const state = Buffer.from(JSON.stringify({ sessionId, product })).toString('base64');
+
+  const discordAuthUrl = `https://discord.com/api/oauth2/authorize? client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&state=${state}`;
+
+  res.redirect(discordAuthUrl);
+});
+
+app.get('/auth/discord/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+
+    if (!code || !state) {
+      return res.status(400).json({ error: 'Missing code or state' });
+    }
+
+    // Decode state to get sessionId and product
+    let sessionId, product;
+    try {
+      const decodedState = JSON.parse(Buffer.from(state, 'base64').toString());
+      sessionId = decodedState.sessionId;
+      product = decodedState.product;
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid state' });
+    }
+
+    if (! PRODUCTS[product]) {
+      return res.status(400).json({ error: 'Invalid product' });
+    }
+
+    // Exchange code for access token
+    const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: process.env.DISCORD_CLIENT_ID,
+        client_secret:  process.env.DISCORD_CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: `${process.env.WEBSITE_URL}/auth/discord/callback`,
+        scope:  'identify email guilds.join'
+      })
+    });
+
+    if (!tokenResponse.ok) {
+      const errorData = await tokenResponse.text();
+      console.error('Discord token error:', errorData);
+      return res.status(400).json({ error: 'Failed to get access token' });
+    }
+
+    const tokenData = await tokenResponse. json();
+    const accessToken = tokenData.access_token;
+
+    // Get user info
+    const userResponse = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    if (!userResponse.ok) {
+      return res.status(400).json({ error: 'Failed to get user info' });
+    }
+
+    const userData = await userResponse.json();
+    const discordId = userData.id;
+    const discordUsername = userData. username;
+    const email = userData.email;
+
+    // Save pending purchase
+    await savePendingPurchase(sessionId, {
+      discordId,
+      discordUsername,
+      email,
+      product,
+      accessToken
+    });
+
+    // Try to add user to server
+    try {
+      await fetch(`https://discord.com/api/guilds/${process.env.DISCORD_GUILD_ID}/members/${discordId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          access_token: accessToken
+        })
+      });
+      console.log(`✅ User ${discordUsername} added to server`);
+    } catch (error) {
+      console.warn(`⚠️ Could not auto-add user to server: ${error.message}`);
+    }
+
+    // Redirect to checkout page
+    res.redirect(`/checkout?session=${sessionId}`);
+  } catch (error) {
+    console.error('OAuth callback error:', error);
+    res.status(500).json({ error: 'OAuth processing failed' });
+  }
+});
+
+app.post('/api/checkout-url/: sessionId', async (req, res) => {
+  try {
+    const session = await getPendingPurchase(req.params.sessionId);
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    if (! session.product || !PRODUCTS[session.product]) {
+      return res.status(400).json({ error: 'Invalid product' });
+    }
+
+    // Use Polar checkout URLs from environment variables
+    const checkoutUrls = {
+      'regular-monthly': process.env.POLAR_URL_REGULAR_MONTHLY,
+      'regular-lifetime': process.env.POLAR_URL_REGULAR_LIFETIME,
+      'master-monthly': process.env. POLAR_URL_MASTER_MONTHLY,
+      'master-lifetime': process.env.POLAR_URL_MASTER_LIFETIME,
+      'nightly':  process.env.POLAR_URL_NIGHTLY
+    };
+
+    const baseUrl = checkoutUrls[session.product];
+    if (!baseUrl) {
+      return res. status(400).json({ error: 'Product not configured' });
+    }
+
+    const metadata = {
+      sessionId: req.params.sessionId,
+      discordId: session.discord_id,
+      discordUsername: session.discord_username,
+      email: session.email
+    };
+
+    const checkoutUrl = `${baseUrl}?metadata=${encodeURIComponent(JSON.stringify(metadata))}`;
+
+    res.json({ checkoutUrl, embedEnabled: true });
+  } catch (error) {
+    console.error('Checkout URL error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/payment-status/:sessionId', async (req, res) => {
+  try {
+    const session = await getPendingPurchase(req.params.sessionId);
+    if (!session) {
+      return res. status(404).json({ status: 'not_found' });
+    }
+
+    res.json({
+      status: session.status || 'pending',
+      product:  session.product,
+      productName: PRODUCTS[session.product]?.name,
+      licenseKey: session.license_key
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Start server
 async function start() {
