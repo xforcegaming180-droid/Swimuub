@@ -465,19 +465,39 @@ app.post('/webhook/polar', async (req, res) => {
     console.log('Headers:', JSON.stringify(req.headers, null, 2));
     console.log('Body (parsed):', JSON.stringify(req.body && typeof req.body === 'object' ? { type: req.body.type } : req.body));
 
-    // Verify webhook signature (Polar sends header like "v1,<base64>")
-    const signatureHeader = req.headers['webhook-signature'] || req.headers['x-polar-signature'];
-    const webhookSecret = process.env.POLAR_WEBHOOK_SECRET;
+    // --- Polar webhook signature verification ---
+    // Header format (from Polar): "v1,<base64signature>"
+    const signatureHeader =
+      (req.headers['webhook-signature'] || req.headers['x-polar-signature'] || '');
+    const webhookSecret = process.env.POLAR_WEBHOOK_SECRET || '';
 
     if (webhookSecret && signatureHeader) {
-      const signatureValue = signatureHeader.includes(',') ? signatureHeader.split(',')[1].trim() : signatureHeader.trim();
+      // Extract the actual signature part (strip the "v1," prefix if present)
+      const parts = signatureHeader.split(',');
+      const signatureValue =
+        parts.length > 1 ? parts[1].trim() : (parts[0] || '').trim();
+
+      // Polar also sends a timestamp header; many providers sign: "<timestamp>.<raw-body>"
+      const timestamp =
+        req.headers['webhook-timestamp'] ||
+        req.headers['x-polar-timestamp'] ||
+        '';
+
+      // Use exact raw body bytes (what Polar signed)
+      const raw =
+        (req.rawBody && req.rawBody.length)
+          ? req.rawBody.toString('utf8')
+          : JSON.stringify(req.body || {});
+
+      const signedPayload = timestamp ? `${timestamp}.${raw}` : raw;
 
       const hmac = crypto.createHmac('sha256', webhookSecret);
-      const expectedBase64 = hmac.update(req.rawBody || Buffer.from(JSON.stringify(req.body))).digest('base64');
+      const expectedBase64 = hmac.update(signedPayload).digest('base64');
 
       console.log('Polar signature header:', signatureHeader);
       console.log('Extracted signature value:', signatureValue);
-      console.log('Expected (base64):', expectedBase64);
+      console.log('Webhook timestamp:', timestamp);
+      console.log('Computed expected (base64):', expectedBase64);
 
       if (signatureValue !== expectedBase64) {
         console.error('Invalid Polar webhook signature');
