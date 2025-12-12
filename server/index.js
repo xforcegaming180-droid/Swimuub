@@ -1,6 +1,3 @@
-### Updated Code (with the fix)
-
-```javascript
 // ==================== SWIMHUB LICENSE MANAGEMENT SYSTEM ====================
 // Complete integrated system:   Database + Discord Bot + Express Server
 // Features:  Manual license key addition, automatic assignment, admin notifications
@@ -13,6 +10,7 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { Pool } = require('pg');
 const fetch = global.fetch || require('node-fetch');
+const rateLimit = require('express-rate-limit');
 const { 
   Client, 
   GatewayIntentBits, 
@@ -63,6 +61,25 @@ app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ---------- RATE LIMITING ----------
+// Rate limiter for webhook endpoints (100 requests per 15 minutes)
+const webhookLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Rate limiter for polling endpoint (more permissive - 120 requests per minute)
+const pollingLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 120, // Allow 120 requests per minute (2 per second sustained)
+  message: 'Too many polling requests, please slow down.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // ---------- DATABASE INITIALIZATION ----------
 async function initDatabase() {
   const client = await pool.connect();
@@ -88,6 +105,12 @@ async function initDatabase() {
       ALTER TABLE pending_purchases 
       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT now();
     `);
+    
+    // Add checkout_id column for Polar integration
+    await client.query(`
+      ALTER TABLE pending_purchases 
+      ADD COLUMN IF NOT EXISTS checkout_id TEXT;
+    `);
     // -----------------------------------------------------------------------
 
     // 2. License Stock Table
@@ -111,6 +134,16 @@ async function initDatabase() {
     await client.query(`
       ALTER TABLE license_stock 
       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT now();
+    `);
+    
+    // Add checkout_id and owner_email columns for Polar integration
+    await client.query(`
+      ALTER TABLE license_stock 
+      ADD COLUMN IF NOT EXISTS checkout_id TEXT;
+    `);
+    await client.query(`
+      ALTER TABLE license_stock 
+      ADD COLUMN IF NOT EXISTS owner_email TEXT;
     `);
 
     // 3. User Licenses Table
@@ -142,6 +175,24 @@ async function initDatabase() {
         transaction_id TEXT,
         purchase_date TIMESTAMP DEFAULT now()
       );
+    `);
+
+    // 5. Licenses table (for tracking by checkout_id for Polar)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS licenses (
+        id SERIAL PRIMARY KEY,
+        key_value TEXT UNIQUE NOT NULL,
+        status TEXT DEFAULT 'available',
+        owner_email TEXT,
+        checkout_id TEXT,
+        created_at TIMESTAMP DEFAULT now(),
+        updated_at TIMESTAMP DEFAULT now()
+      );
+    `);
+    
+    // Add index for fast checkout_id lookups
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_licenses_checkout_id ON licenses(checkout_id);
     `);
 
     console.log('✅ Database tables initialized and schemas updated');
@@ -471,7 +522,7 @@ app.get('/checkout.html', (req, res) => {
 });
 
 // Polar webhook
-app.post('/webhook/polar', async (req, res) => {
+app.post('/webhook/polar', webhookLimiter, async (req, res) => {
   try {
     console.log('=== POLAR WEBHOOK RECEIVED ===');
     
@@ -481,28 +532,37 @@ app.post('/webhook/polar', async (req, res) => {
 
     let signatureValid = skipSig;
 
+    // Verify signature using rawBody (not req.body)
     if (!signatureValid && webhookSecret && signatureHeader) {
       const parts = signatureHeader.split(',');
       const signatureValue = parts.length > 1 ? parts[1].trim() : parts[0].trim();
       const timestamp = req.headers['webhook-timestamp'] || '';
-      const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body);
+      
+      // Use rawBody for signature verification
+      if (!req.rawBody) {
+        console.error('❌ rawBody not available for signature verification');
+        return res.status(400).json({ error: 'rawBody not available' });
+      }
+      
+      const rawBodyString = req.rawBody.toString('utf8');
 
       const candidates = [
-        { label: 'timestamp + raw', payload: `${timestamp}.${raw}` },
-        { label: 'raw', payload: raw }
+        { label: 'timestamp + raw', payload: `${timestamp}.${rawBodyString}` },
+        { label: 'raw', payload: rawBodyString }
       ];
 
       for (const c of candidates) {
         const h = crypto.createHmac('sha256', webhookSecret).update(c.payload).digest('base64');
         if (h === signatureValue) {
           signatureValid = true;
+          console.log(`✅ Signature verified using: ${c.label}`);
           break;
         }
       }
     }
 
     if (!signatureValid) {
-      console.error('Invalid Polar webhook signature');
+      console.error('❌ Invalid Polar webhook signature');
       return res.status(401).json({ error: 'Invalid signature' });
     }
 
@@ -519,9 +579,85 @@ app.post('/webhook/polar', async (req, res) => {
     const successEvents = ['checkout.completed', 'order.created', 'checkout.updated', 'payment.success'];
 
     if (successEvents.includes(event.type)) {
-      const result = await processCheckoutPayload(event);
-      if (!result.success) {
-        return res.status(200).json({ received: true, error: result.reason });
+      // Extract checkout_id and customer_email from Polar payload
+      // Polar.sh webhook payload structure:
+      // {
+      //   type: 'checkout.completed',
+      //   id: 'event_id',
+      //   data: {
+      //     id: 'checkout_id',  // or checkoutId, or checkout_id
+      //     customer: { email: 'user@example.com' },  // or user.email or data.email
+      //     ...
+      //   }
+      // }
+      const data = event.data || event;
+      const checkout_id = data.id || data.checkout_id || data.checkoutId;
+      const customer = data.customer || data.user || {};
+      const customer_email = customer.email || data.email;
+
+      if (!checkout_id) {
+        console.error('❌ No checkout_id in webhook payload');
+        return res.status(200).json({ received: true, error: 'no_checkout_id' });
+      }
+
+      if (!customer_email) {
+        console.error('❌ No customer_email in webhook payload');
+        return res.status(200).json({ received: true, error: 'no_customer_email' });
+      }
+
+      console.log(`📦 Processing checkout: ${checkout_id} for ${customer_email}`);
+
+      // Assign a license key from the database
+      const client = await pool.connect();
+      try {
+        // Fetch and assign a fresh license key atomically with row-level locking
+        const result = await client.query(
+          `UPDATE licenses 
+           SET status='used', owner_email=$1, checkout_id=$2, updated_at=now() 
+           WHERE id = (
+             SELECT id FROM licenses 
+             WHERE status='available' 
+             LIMIT 1 
+             FOR UPDATE SKIP LOCKED
+           ) 
+           RETURNING key_value`,
+          [customer_email, checkout_id]
+        );
+
+        if (result.rows.length === 0) {
+          console.error('❌ No available license keys in stock');
+          return res.status(200).json({ received: true, error: 'no_available_keys' });
+        }
+
+        const licenseKey = result.rows[0].key_value;
+        console.log(`✅ Assigned license key: ${licenseKey} to ${customer_email}`);
+
+        // Send Discord notification to admin
+        if (discordClient && process.env.ADMIN_DISCORD_ID) {
+          try {
+            const admin = await discordClient.users.fetch(process.env.ADMIN_DISCORD_ID);
+            const embed = new EmbedBuilder()
+              .setColor('#10b981')
+              .setTitle('💰 New License Sale!')
+              .setDescription('A customer has purchased a license')
+              .addFields(
+                { name: 'License Key', value: `\`${licenseKey}\``, inline: false },
+                { name: 'Customer Email', value: customer_email, inline: true },
+                { name: 'Checkout ID', value: checkout_id, inline: true }
+              )
+              .setFooter({ text: 'SwimHub License System' })
+              .setTimestamp();
+
+            await admin.send({ embeds: [embed] });
+            console.log('✅ Admin notification sent');
+          } catch (error) {
+            console.error('Failed to send admin notification:', error.message);
+          }
+        }
+
+        return res.status(200).json({ received: true, success: true });
+      } finally {
+        client.release();
       }
     }
 
@@ -529,6 +665,41 @@ app.post('/webhook/polar', async (req, res) => {
   } catch (error) {
     console.error('Polar webhook error:', error);
     return res.status(200).json({ received: true, error: error.message });
+  }
+});
+
+// Polling endpoint for frontend to claim license key
+app.get('/api/claim-key', pollingLimiter, async (req, res) => {
+  try {
+    const { checkout_id } = req.query;
+
+    if (!checkout_id) {
+      return res.status(400).json({ error: 'checkout_id parameter required' });
+    }
+
+    console.log(`🔍 Polling for checkout_id: ${checkout_id}`);
+
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        'SELECT key_value FROM licenses WHERE checkout_id = $1 AND status = $2',
+        [checkout_id, 'used']
+      );
+
+      if (result.rows.length > 0) {
+        const key = result.rows[0].key_value;
+        console.log(`✅ Key found for checkout_id: ${checkout_id}`);
+        return res.json({ status: 'ready', key });
+      } else {
+        console.log(`⏳ Key not ready yet for checkout_id: ${checkout_id}`);
+        return res.json({ status: 'pending' });
+      }
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Claim key error:', error);
+    return res.status(500).json({ error: error.message });
   }
 });
 
@@ -977,11 +1148,3 @@ process.on('SIGINT', () => {
   pool.end();
   process.exit(0);
 });
-```
-
-### What Changed:
-1.  Updated the `initDatabase` function to **add the missing `updated_at` column** to the `pending_purchases` table using `ALTER TABLE`.
-2.  Added a similar fix for the `license_stock` table just in case.
-3.  **No other changes** were made to your original logic or functionality.
-
-After applying this code, restart your bot. The error should be resolved, and your OAuth flow should work correctly.
