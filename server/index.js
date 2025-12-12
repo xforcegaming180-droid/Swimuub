@@ -517,7 +517,6 @@ async function processCheckoutPayload(payload) {
 
 // ---------- ROUTES ----------
 
-// URL rewriting - serve HTML files without .html extension
 app.get('/checkout', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'checkout.html'));
 });
@@ -525,47 +524,6 @@ app.get('/checkout', (req, res) => {
 app.get('/checkout.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'checkout.html'));
 });
-
-app.get('/purchase', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'purchase.html'));
-});
-
-app.get('/purchase.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'purchase.html'));
-});
-
-app.get('/success', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'success.html'));
-});
-
-app.get('/success.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'success.html'));
-});
-
-app.get('/terms', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'terms.html'));
-});
-
-app.get('/terms.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'terms.html'));
-});
-
-app.get('/privacy', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'privacy.html'));
-});
-
-app.get('/privacy.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'privacy.html'));
-});
-
-app.get('/waiting', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'waiting.html'));
-});
-
-app.get('/waiting.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'waiting.html'));
-});
-
 
 // Polar webhook
 app.post('/webhook/polar', webhookLimiter, async (req, res) => {

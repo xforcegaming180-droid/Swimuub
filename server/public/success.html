@@ -95,6 +95,110 @@
             margin-bottom: 30px;
             line-height: 1.6;
         }
+
+        .loading-notice {
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.12), rgba(59, 130, 246, 0.12));
+            border-radius: 16px;
+            padding: 25px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(0, 212, 255, 0.25);
+        }
+
+        .loading-notice-icon {
+            font-size: 3rem;
+            color: #00d4ff;
+            margin-bottom: 15px;
+            animation: spin 2s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-notice-title {
+            color: #fff;
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .loading-notice-text {
+            color: #94a3b8;
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
+        .license-display {
+            background: rgba(16, 185, 129, 0.1);
+            border: 2px solid #10b981;
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 30px;
+            display: none;
+        }
+
+        .license-display.show {
+            display: block;
+            animation: slideIn 0.5s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .license-title {
+            color: #10b981;
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+        }
+
+        .license-key {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #10b981;
+            letter-spacing: 2px;
+            word-break: break-all;
+            margin-bottom: 15px;
+        }
+
+        .copy-btn {
+            background: #10b981;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .copy-btn:hover {
+            background: #059669;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(16, 185, 129, 0.4);
+        }
+
+        .copy-btn.copied {
+            background: #3b82f6;
+        }
         
         .dm-notice {
             background: linear-gradient(135deg, rgba(88, 101, 242, 0.12), rgba(0, 212, 255, 0.12));
@@ -102,6 +206,11 @@
             padding: 25px;
             margin-bottom: 30px;
             border: 1px solid rgba(88, 101, 242, 0.25);
+            display: none;
+        }
+
+        .dm-notice.show {
+            display: block;
         }
         
         .dm-notice-icon {
@@ -126,61 +235,6 @@
         .dm-notice-highlight {
             color: #00d4ff;
             font-weight: 600;
-        }
-        
-        .steps-container {
-            text-align: left;
-            background: rgba(0, 212, 255, 0.08);
-            border-radius: 16px;
-            padding: 25px;
-            margin-bottom: 30px;
-            border: 1px solid rgba(0, 212, 255, 0.15);
-        }
-        
-        .steps-title {
-            color: #fff;
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .steps-title i {
-            color: #00d4ff;
-        }
-        
-        .step-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 15px;
-            padding: 12px 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        }
-        
-        .step-item:last-child {
-            border-bottom: none;
-        }
-        
-        .step-number {
-            width: 28px;
-            height: 28px;
-            background: linear-gradient(135deg, #00d4ff, #3b82f6);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: white;
-            flex-shrink: 0;
-        }
-        
-        .step-text {
-            color: #d1d5db;
-            font-size: 0.95rem;
-            line-height: 1.5;
         }
         
         .action-buttons {
@@ -289,6 +343,20 @@
             text-decoration: underline;
             color: #3b82f6;
         }
+
+        .error-notice {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 20px;
+            color: #ef4444;
+            display: none;
+        }
+
+        .error-notice.show {
+            display: block;
+        }
     </style>
 </head>
 <body class="legal-page">
@@ -305,37 +373,143 @@
                 <i class="fas fa-check checkmark"></i>
             </div>
             
-            <h1 class="success-title">Payment Successful!</h1>
-            <p class="success-subtitle">Thank you for your purchase!</p>
+            <h1 class="success-title">Purchase Successful!</h1>
+            <p class="success-subtitle">Thank you for purchasing SwimHub!</p>
+
+            <!-- Loading state -->
+            <div class="loading-notice" id="loadingNotice">
+                <i class="fas fa-spinner loading-notice-icon"></i>
+                <h3 class="loading-notice-title">Preparing Your License Key...</h3>
+                <p class="loading-notice-text">
+                    Please wait while we process your purchase and generate your license key.
+                    This usually takes just a few seconds.
+                </p>
+            </div>
+
+            <!-- Error state -->
+            <div class="error-notice" id="errorNotice">
+                <i class="fas fa-exclamation-triangle"></i>
+                <strong>Unable to retrieve license key.</strong>
+                <p>Please check your Discord DMs or contact support if the issue persists.</p>
+            </div>
+
+            <!-- License key display -->
+            <div class="license-display" id="licenseDisplay">
+                <h2 class="license-title">🎉 Your License Key</h2>
+                <div class="license-key" id="licenseKey">LOADING...</div>
+                <button class="copy-btn" id="copyBtn">
+                    <i class="fas fa-copy"></i> Copy to Clipboard
+                </button>
+            </div>
             
-            <div class="dm-notice">
-                <i class="fas fa-check-circle dm-notice-icon" style="color: #10b981;"></i>
-                <h3 class="dm-notice-title">Your Purchase is Complete</h3>
+            <div class="dm-notice" id="dmNotice">
+                <i class="fab fa-discord dm-notice-icon"></i>
+                <h3 class="dm-notice-title">Also Check Your Discord DMs</h3>
                 <p class="dm-notice-text">
-                    Your license key has been delivered via <span class="dm-notice-highlight">Polar</span>. 
-                    Please check your email receipt for your license key.
+                    A copy of your license key has also been sent to your <span class="dm-notice-highlight">Discord Direct Messages</span>.
                 </p>
             </div>
             
             <div class="action-buttons">
-                <a href="/" class="home-btn" style="background: linear-gradient(135deg, #10b981, #059669); color: white; border: none;">
-                    <i class="fas fa-home"></i> Back to Home
-                </a>
                 <a href="https://dsc.gg/swimhub" target="_blank" class="discord-btn">
-                    <i class="fab fa-discord"></i> Join Discord
+                    <i class="fab fa-discord"></i> Open Discord
+                </a>
+                <a href="index.html" class="home-btn">
+                    <i class="fas fa-home"></i> Back to Home
                 </a>
             </div>
             
             <div class="support-note">
                 <p>
                     <i class="fas fa-question-circle"></i> 
-                    Need help with your license key? <a href="https://dsc.gg/swimhub" target="_blank">Contact support</a>
+                    Need help? <a href="https://dsc.gg/swimhub" target="_blank">Contact support</a>
                 </p>
             </div>
         </div>
     </div>
     
     <script>
+        // Configuration constants
+        const POLL_INTERVAL_MS = 2000; // Poll every 2 seconds
+        const POLL_TIMEOUT_SECONDS = 120; // 2 minutes max
+        const MAX_POLL_ATTEMPTS = POLL_TIMEOUT_SECONDS / (POLL_INTERVAL_MS / 1000); // 60 attempts
+
+        // Extract checkout_id from URL
+        function getCheckoutIdFromURL() {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('checkout_id');
+        }
+
+        // Poll for license key
+        let pollInterval = null;
+        let pollAttempts = 0;
+
+        async function pollForLicenseKey(checkoutId) {
+            try {
+                const response = await fetch(`/api/claim-key?checkout_id=${encodeURIComponent(checkoutId)}`);
+                const data = await response.json();
+
+                pollAttempts++;
+
+                if (data.status === 'ready' && data.key) {
+                    // Key is ready!
+                    clearInterval(pollInterval);
+                    displayLicenseKey(data.key);
+                } else if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+                    // Timeout after max attempts
+                    clearInterval(pollInterval);
+                    showError();
+                }
+            } catch (error) {
+                console.error('Polling error:', error);
+                // Only count server errors as attempts, not network errors
+                if (error.name !== 'TypeError') {
+                    pollAttempts++;
+                }
+                if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+                    clearInterval(pollInterval);
+                    showError();
+                }
+            }
+        }
+
+        function displayLicenseKey(key) {
+            // Hide loading
+            document.getElementById('loadingNotice').style.display = 'none';
+            
+            // Show license key
+            document.getElementById('licenseKey').textContent = key;
+            document.getElementById('licenseDisplay').classList.add('show');
+            document.getElementById('dmNotice').classList.add('show');
+
+            // Trigger confetti
+            createConfetti();
+        }
+
+        function showError() {
+            document.getElementById('loadingNotice').style.display = 'none';
+            document.getElementById('errorNotice').classList.add('show');
+            document.getElementById('dmNotice').classList.add('show');
+        }
+
+        // Copy to clipboard functionality
+        document.getElementById('copyBtn').addEventListener('click', function() {
+            const licenseKey = document.getElementById('licenseKey').textContent;
+            navigator.clipboard.writeText(licenseKey).then(() => {
+                const btn = this;
+                const originalHTML = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                btn.classList.add('copied');
+                
+                setTimeout(() => {
+                    btn.innerHTML = originalHTML;
+                    btn.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+            });
+        });
+
         // Create confetti effect
         function createConfetti() {
             const confettiContainer = document.getElementById('confetti');
@@ -362,9 +536,23 @@
                 }, i * 50);
             }
         }
-        
-        // Start confetti on page load
-        document.addEventListener('DOMContentLoaded', createConfetti);
+
+        // Start polling on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const checkoutId = getCheckoutIdFromURL();
+            
+            if (!checkoutId) {
+                console.error('No checkout_id found in URL');
+                showError();
+                return;
+            }
+
+            console.log('Starting to poll for checkout_id:', checkoutId);
+            
+            // Start polling on page load
+            pollForLicenseKey(checkoutId);
+            pollInterval = setInterval(() => pollForLicenseKey(checkoutId), POLL_INTERVAL_MS);
+        });
     </script>
 </body>
 </html>

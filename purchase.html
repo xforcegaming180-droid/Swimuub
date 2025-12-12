@@ -13,7 +13,7 @@
     <div class="gradient-orb orb-2"></div>
 
     <div class="purchase-container">
-        <a href="/" class="back-btn">
+        <a href="index.html" class="back-btn">
             <i class="fas fa-arrow-left"></i> Back to Home
         </a>
         
@@ -113,11 +113,11 @@
                 </div>
                 
                 <div class="cta-buttons fungies-buttons">
-                    <a href="#" class="cta-button fungies-btn monthly-btn" data-product="regular-monthly">
-                        <i class="fas fa-shopping-cart"></i> Purchase Monthly
+                    <a href="/auth/discord?product=regular-monthly" class="cta-button fungies-btn monthly-btn" data-product="regular-monthly">
+                        <i class="fab fa-discord"></i> Purchase Monthly
                     </a>
-                    <a href="#" class="cta-button fungies-btn lifetime-btn" data-product="regular-lifetime">
-                        <i class="fas fa-shopping-cart"></i> Purchase Lifetime
+                    <a href="/auth/discord?product=regular-lifetime" class="cta-button fungies-btn lifetime-btn" data-product="regular-lifetime">
+                        <i class="fab fa-discord"></i> Purchase Lifetime
                     </a>
                 </div>
                 <div class="cta-buttons secondary-buttons">
@@ -221,11 +221,11 @@
                 </div>
                 
                 <div class="cta-buttons fungies-buttons">
-                    <a href="#" class="cta-button fungies-btn monthly-btn" data-product="master-monthly">
-                        <i class="fas fa-shopping-cart"></i> Purchase Monthly
+                    <a href="/auth/discord?product=master-monthly" class="cta-button fungies-btn monthly-btn" data-product="master-monthly">
+                        <i class="fab fa-discord"></i> Purchase Monthly
                     </a>
-                    <a href="#" class="cta-button fungies-btn lifetime-btn" data-product="master-lifetime">
-                        <i class="fas fa-shopping-cart"></i> Purchase Lifetime
+                    <a href="/auth/discord?product=master-lifetime" class="cta-button fungies-btn lifetime-btn" data-product="master-lifetime">
+                        <i class="fab fa-discord"></i> Purchase Lifetime
                     </a>
                 </div>
                 <div class="cta-buttons secondary-buttons">
@@ -330,42 +330,5 @@
     </div>
     
     <script src="script.js"></script>
-    <script>
-        // Configuration: Polar checkout URLs
-        // TODO: Update these URLs with your actual Polar checkout links from your dashboard
-        const POLAR_CONFIG = {
-            checkoutUrls: {
-                'regular-monthly': 'https://polar.sh/xforcegaming180-droid/checkout/regular-monthly',
-                'regular-lifetime': 'https://polar.sh/xforcegaming180-droid/checkout/regular-lifetime',
-                'master-monthly': 'https://polar.sh/xforcegaming180-droid/checkout/master-monthly',
-                'master-lifetime': 'https://polar.sh/xforcegaming180-droid/checkout/master-lifetime',
-                'nightly': 'https://polar.sh/xforcegaming180-droid/checkout/nightly'
-            }
-        };
-        
-        // Initialize purchase buttons
-        document.addEventListener('DOMContentLoaded', function() {
-            // Get all purchase buttons with data-product attribute
-            const purchaseButtons = document.querySelectorAll('[data-product]');
-            
-            purchaseButtons.forEach(button => {
-                button.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    
-                    const product = this.getAttribute('data-product');
-                    const checkoutUrl = POLAR_CONFIG.checkoutUrls[product];
-                    
-                    if (checkoutUrl) {
-                        // Note: Configure Polar checkout success URL to: 
-                        // https://swimhub.club/waiting?checkout_id={CHECKOUT_ID}
-                        // This will allow automatic license key retrieval after payment
-                        window.location.href = checkoutUrl;
-                    } else {
-                        alert('Product checkout not configured. Please contact support.');
-                    }
-                });
-            });
-        });
-    </script>
 </body>
 </html>
