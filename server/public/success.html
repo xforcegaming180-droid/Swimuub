@@ -429,6 +429,11 @@
     </div>
     
     <script>
+        // Configuration constants
+        const POLL_INTERVAL_MS = 2000; // Poll every 2 seconds
+        const POLL_TIMEOUT_SECONDS = 120; // 2 minutes max
+        const MAX_POLL_ATTEMPTS = POLL_TIMEOUT_SECONDS / (POLL_INTERVAL_MS / 1000); // 60 attempts
+
         // Extract checkout_id from URL
         function getCheckoutIdFromURL() {
             const urlParams = new URLSearchParams(window.location.search);
@@ -438,7 +443,6 @@
         // Poll for license key
         let pollInterval = null;
         let pollAttempts = 0;
-        const MAX_POLL_ATTEMPTS = 60; // 60 attempts * 2 seconds = 2 minutes max
 
         async function pollForLicenseKey(checkoutId) {
             try {
@@ -458,7 +462,10 @@
                 }
             } catch (error) {
                 console.error('Polling error:', error);
-                pollAttempts++;
+                // Only count server errors as attempts, not network errors
+                if (error.name !== 'TypeError') {
+                    pollAttempts++;
+                }
                 if (pollAttempts >= MAX_POLL_ATTEMPTS) {
                     clearInterval(pollInterval);
                     showError();
@@ -542,9 +549,9 @@
 
             console.log('Starting to poll for checkout_id:', checkoutId);
             
-            // Start polling immediately, then every 2 seconds
+            // Start polling on page load
             pollForLicenseKey(checkoutId);
-            pollInterval = setInterval(() => pollForLicenseKey(checkoutId), 2000);
+            pollInterval = setInterval(() => pollForLicenseKey(checkoutId), POLL_INTERVAL_MS);
         });
     </script>
 </body>

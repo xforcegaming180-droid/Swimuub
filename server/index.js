@@ -560,6 +560,16 @@ app.post('/webhook/polar', async (req, res) => {
 
     if (successEvents.includes(event.type)) {
       // Extract checkout_id and customer_email from Polar payload
+      // Polar.sh webhook payload structure:
+      // {
+      //   type: 'checkout.completed',
+      //   id: 'event_id',
+      //   data: {
+      //     id: 'checkout_id',  // or checkoutId, or checkout_id
+      //     customer: { email: 'user@example.com' },  // or user.email or data.email
+      //     ...
+      //   }
+      // }
       const data = event.data || event;
       const checkout_id = data.id || data.checkout_id || data.checkoutId;
       const customer = data.customer || data.user || {};
@@ -580,11 +590,16 @@ app.post('/webhook/polar', async (req, res) => {
       // Assign a license key from the database
       const client = await pool.connect();
       try {
-        // Fetch and assign a fresh license key
+        // Fetch and assign a fresh license key atomically with row-level locking
         const result = await client.query(
           `UPDATE licenses 
            SET status='used', owner_email=$1, checkout_id=$2, updated_at=now() 
-           WHERE id = (SELECT id FROM licenses WHERE status='available' LIMIT 1) 
+           WHERE id = (
+             SELECT id FROM licenses 
+             WHERE status='available' 
+             LIMIT 1 
+             FOR UPDATE SKIP LOCKED
+           ) 
            RETURNING key_value`,
           [customer_email, checkout_id]
         );
