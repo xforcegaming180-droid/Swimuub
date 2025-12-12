@@ -52,6 +52,10 @@ const discordClient = new Client({
 });
 
 // ---------- MIDDLEWARE ----------
+// Trust proxy - required when running behind a reverse proxy (Railway, etc.)
+// This allows express-rate-limit to correctly identify users via X-Forwarded-For header
+app.set('trust proxy', 1);
+
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf;
@@ -1144,7 +1148,7 @@ discordClient.on('interactionCreate', async (interaction) => {
   }
 });
 
-discordClient.once('ready', async () => {
+discordClient.once('clientReady', async () => {
   console.log(`✅ Bot logged in as ${discordClient.user.tag}`);
   await registerCommands();
 });
