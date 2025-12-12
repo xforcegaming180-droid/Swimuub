@@ -13,7 +13,7 @@
     <div class="gradient-orb orb-2"></div>
 
     <div class="purchase-container">
-        <a href="index.html" class="back-btn">
+        <a href="/" class="back-btn">
             <i class="fas fa-arrow-left"></i> Back to Home
         </a>
         
@@ -113,11 +113,11 @@
                 </div>
                 
                 <div class="cta-buttons fungies-buttons">
-                    <a href="/auth/discord?product=regular-monthly" class="cta-button fungies-btn monthly-btn" data-product="regular-monthly">
-                        <i class="fab fa-discord"></i> Purchase Monthly
+                    <a href="#" class="cta-button fungies-btn monthly-btn" data-product="regular-monthly" onclick="openPolarCheckout('regular-monthly'); return false;">
+                        <i class="fas fa-shopping-cart"></i> Purchase Monthly
                     </a>
-                    <a href="/auth/discord?product=regular-lifetime" class="cta-button fungies-btn lifetime-btn" data-product="regular-lifetime">
-                        <i class="fab fa-discord"></i> Purchase Lifetime
+                    <a href="#" class="cta-button fungies-btn lifetime-btn" data-product="regular-lifetime" onclick="openPolarCheckout('regular-lifetime'); return false;">
+                        <i class="fas fa-shopping-cart"></i> Purchase Lifetime
                     </a>
                 </div>
                 <div class="cta-buttons secondary-buttons">
@@ -221,11 +221,11 @@
                 </div>
                 
                 <div class="cta-buttons fungies-buttons">
-                    <a href="/auth/discord?product=master-monthly" class="cta-button fungies-btn monthly-btn" data-product="master-monthly">
-                        <i class="fab fa-discord"></i> Purchase Monthly
+                    <a href="#" class="cta-button fungies-btn monthly-btn" data-product="master-monthly" onclick="openPolarCheckout('master-monthly'); return false;">
+                        <i class="fas fa-shopping-cart"></i> Purchase Monthly
                     </a>
-                    <a href="/auth/discord?product=master-lifetime" class="cta-button fungies-btn lifetime-btn" data-product="master-lifetime">
-                        <i class="fab fa-discord"></i> Purchase Lifetime
+                    <a href="#" class="cta-button fungies-btn lifetime-btn" data-product="master-lifetime" onclick="openPolarCheckout('master-lifetime'); return false;">
+                        <i class="fas fa-shopping-cart"></i> Purchase Lifetime
                     </a>
                 </div>
                 <div class="cta-buttons secondary-buttons">
@@ -330,5 +330,27 @@
     </div>
     
     <script src="script.js"></script>
+    <script>
+        // Polar product checkout URLs - these should be configured to redirect to /waiting?checkout_id={CHECKOUT_ID}
+        // For now, we'll open Polar checkout in the same window and rely on Polar's success redirect
+        const polarCheckoutUrls = {
+            'regular-monthly': 'https://polar.sh/xforcegaming180-droid/checkout/regular-monthly',
+            'regular-lifetime': 'https://polar.sh/xforcegaming180-droid/checkout/regular-lifetime',
+            'master-monthly': 'https://polar.sh/xforcegaming180-droid/checkout/master-monthly',
+            'master-lifetime': 'https://polar.sh/xforcegaming180-droid/checkout/master-lifetime',
+            'nightly': 'https://polar.sh/xforcegaming180-droid/checkout/nightly'
+        };
+        
+        function openPolarCheckout(product) {
+            const checkoutUrl = polarCheckoutUrls[product];
+            if (checkoutUrl) {
+                // Note: Configure Polar checkout success URL to: https://swimhub.club/waiting?checkout_id={CHECKOUT_ID}
+                // This will allow automatic license key retrieval after payment
+                window.location.href = checkoutUrl;
+            } else {
+                alert('Product checkout not configured. Please contact support.');
+            }
+        }
+    </script>
 </body>
 </html>
