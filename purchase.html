@@ -113,10 +113,10 @@
                 </div>
                 
                 <div class="cta-buttons fungies-buttons">
-                    <a href="#" class="cta-button fungies-btn monthly-btn" data-product="regular-monthly" onclick="openPolarCheckout('regular-monthly'); return false;">
+                    <a href="#" class="cta-button fungies-btn monthly-btn" data-product="regular-monthly">
                         <i class="fas fa-shopping-cart"></i> Purchase Monthly
                     </a>
-                    <a href="#" class="cta-button fungies-btn lifetime-btn" data-product="regular-lifetime" onclick="openPolarCheckout('regular-lifetime'); return false;">
+                    <a href="#" class="cta-button fungies-btn lifetime-btn" data-product="regular-lifetime">
                         <i class="fas fa-shopping-cart"></i> Purchase Lifetime
                     </a>
                 </div>
@@ -221,10 +221,10 @@
                 </div>
                 
                 <div class="cta-buttons fungies-buttons">
-                    <a href="#" class="cta-button fungies-btn monthly-btn" data-product="master-monthly" onclick="openPolarCheckout('master-monthly'); return false;">
+                    <a href="#" class="cta-button fungies-btn monthly-btn" data-product="master-monthly">
                         <i class="fas fa-shopping-cart"></i> Purchase Monthly
                     </a>
-                    <a href="#" class="cta-button fungies-btn lifetime-btn" data-product="master-lifetime" onclick="openPolarCheckout('master-lifetime'); return false;">
+                    <a href="#" class="cta-button fungies-btn lifetime-btn" data-product="master-lifetime">
                         <i class="fas fa-shopping-cart"></i> Purchase Lifetime
                     </a>
                 </div>
@@ -331,26 +331,41 @@
     
     <script src="script.js"></script>
     <script>
-        // Polar product checkout URLs - these should be configured to redirect to /waiting?checkout_id={CHECKOUT_ID}
-        // For now, we'll open Polar checkout in the same window and rely on Polar's success redirect
-        const polarCheckoutUrls = {
-            'regular-monthly': 'https://polar.sh/xforcegaming180-droid/checkout/regular-monthly',
-            'regular-lifetime': 'https://polar.sh/xforcegaming180-droid/checkout/regular-lifetime',
-            'master-monthly': 'https://polar.sh/xforcegaming180-droid/checkout/master-monthly',
-            'master-lifetime': 'https://polar.sh/xforcegaming180-droid/checkout/master-lifetime',
-            'nightly': 'https://polar.sh/xforcegaming180-droid/checkout/nightly'
+        // Configuration: Polar checkout URLs
+        // TODO: Update these URLs with your actual Polar checkout links from your dashboard
+        const POLAR_CONFIG = {
+            checkoutUrls: {
+                'regular-monthly': 'https://polar.sh/xforcegaming180-droid/checkout/regular-monthly',
+                'regular-lifetime': 'https://polar.sh/xforcegaming180-droid/checkout/regular-lifetime',
+                'master-monthly': 'https://polar.sh/xforcegaming180-droid/checkout/master-monthly',
+                'master-lifetime': 'https://polar.sh/xforcegaming180-droid/checkout/master-lifetime',
+                'nightly': 'https://polar.sh/xforcegaming180-droid/checkout/nightly'
+            }
         };
         
-        function openPolarCheckout(product) {
-            const checkoutUrl = polarCheckoutUrls[product];
-            if (checkoutUrl) {
-                // Note: Configure Polar checkout success URL to: https://swimhub.club/waiting?checkout_id={CHECKOUT_ID}
-                // This will allow automatic license key retrieval after payment
-                window.location.href = checkoutUrl;
-            } else {
-                alert('Product checkout not configured. Please contact support.');
-            }
-        }
+        // Initialize purchase buttons
+        document.addEventListener('DOMContentLoaded', function() {
+            // Get all purchase buttons with data-product attribute
+            const purchaseButtons = document.querySelectorAll('[data-product]');
+            
+            purchaseButtons.forEach(button => {
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    
+                    const product = this.getAttribute('data-product');
+                    const checkoutUrl = POLAR_CONFIG.checkoutUrls[product];
+                    
+                    if (checkoutUrl) {
+                        // Note: Configure Polar checkout success URL to: 
+                        // https://swimhub.club/waiting?checkout_id={CHECKOUT_ID}
+                        // This will allow automatic license key retrieval after payment
+                        window.location.href = checkoutUrl;
+                    } else {
+                        alert('Product checkout not configured. Please contact support.');
+                    }
+                });
+            });
+        });
     </script>
 </body>
 </html>

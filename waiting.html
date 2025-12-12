@@ -178,7 +178,7 @@
             <div class="license-display" id="licenseDisplay">
                 <div class="license-label">Your License Key:</div>
                 <div class="license-key" id="licenseKey">XXXX-XXXX-XXXX-XXXX</div>
-                <button class="copy-btn" onclick="copyLicenseKey()">
+                <button class="copy-btn" id="copyBtn">
                     <i class="fas fa-copy"></i> Copy License Key
                 </button>
             </div>
@@ -195,6 +195,13 @@
     </div>
     
     <script>
+        // Configuration
+        const POLLING_CONFIG = {
+            maxAttempts: 60,      // Maximum polling attempts (60 seconds)
+            pollInterval: 1000,   // Poll every 1 second
+            retryDelay: 2000      // Retry delay on error (2 seconds)
+        };
+        
         const urlParams = new URLSearchParams(window.location.search);
         const checkoutId = urlParams.get('checkout_id');
         
@@ -205,18 +212,22 @@
         const homeBtn = document.getElementById('homeBtn');
         const pageTitle = document.getElementById('pageTitle');
         const pageSubtitle = document.getElementById('pageSubtitle');
+        const copyBtn = document.getElementById('copyBtn');
         
-        function copyLicenseKey() {
+        // Copy license key to clipboard
+        copyBtn.addEventListener('click', function() {
             const key = licenseKeyEl.textContent;
             navigator.clipboard.writeText(key).then(() => {
-                const btn = event.target.closest('button');
-                const originalText = btn.innerHTML;
-                btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                const originalText = copyBtn.innerHTML;
+                copyBtn.innerHTML = '<i class="fas fa-check"></i> Copied!';
                 setTimeout(() => {
-                    btn.innerHTML = originalText;
+                    copyBtn.innerHTML = originalText;
                 }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                alert('Failed to copy. Please select and copy manually.');
             });
-        }
+        });
         
         async function pollForLicenseKey() {
             if (!checkoutId) {
@@ -229,7 +240,6 @@
             }
             
             let attempts = 0;
-            const maxAttempts = 60; // Try for 60 seconds
             
             const poll = async () => {
                 attempts++;
@@ -246,9 +256,9 @@
                         pageTitle.textContent = 'License Key Ready!';
                         pageSubtitle.textContent = 'Your purchase is complete. Here\'s your license key:';
                         homeBtn.style.display = 'inline-flex';
-                    } else if (attempts < maxAttempts) {
+                    } else if (attempts < POLLING_CONFIG.maxAttempts) {
                         // Keep polling
-                        setTimeout(poll, 1000);
+                        setTimeout(poll, POLLING_CONFIG.pollInterval);
                     } else {
                         // Timeout - show error
                         spinner.style.display = 'none';
@@ -259,8 +269,8 @@
                     }
                 } catch (error) {
                     console.error('Polling error:', error);
-                    if (attempts < maxAttempts) {
-                        setTimeout(poll, 2000); // Slower retry on error
+                    if (attempts < POLLING_CONFIG.maxAttempts) {
+                        setTimeout(poll, POLLING_CONFIG.retryDelay); // Slower retry on error
                     } else {
                         spinner.style.display = 'none';
                         errorMessage.style.display = 'block';
