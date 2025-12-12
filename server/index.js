@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { Pool } = require('pg');
 const fetch = global.fetch || require('node-fetch');
+const rateLimit = require('express-rate-limit');
 const { 
   Client, 
   GatewayIntentBits, 
@@ -59,6 +60,25 @@ app.use(express.json({
 app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ---------- RATE LIMITING ----------
+// Rate limiter for webhook endpoints (100 requests per 15 minutes)
+const webhookLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Rate limiter for polling endpoint (more permissive - 120 requests per minute)
+const pollingLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 120, // Allow 120 requests per minute (2 per second sustained)
+  message: 'Too many polling requests, please slow down.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // ---------- DATABASE INITIALIZATION ----------
 async function initDatabase() {
@@ -502,7 +522,7 @@ app.get('/checkout.html', (req, res) => {
 });
 
 // Polar webhook
-app.post('/webhook/polar', async (req, res) => {
+app.post('/webhook/polar', webhookLimiter, async (req, res) => {
   try {
     console.log('=== POLAR WEBHOOK RECEIVED ===');
     
@@ -649,7 +669,7 @@ app.post('/webhook/polar', async (req, res) => {
 });
 
 // Polling endpoint for frontend to claim license key
-app.get('/api/claim-key', async (req, res) => {
+app.get('/api/claim-key', pollingLimiter, async (req, res) => {
   try {
     const { checkout_id } = req.query;
 
