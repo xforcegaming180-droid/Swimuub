@@ -994,6 +994,32 @@ app.get('/api/checkout-url/:sessionId', async (req, res) => {
   }
 });
 
+app.get('/api/session/:sessionId', async (req, res) => {
+  try {
+    const session = await getPendingPurchase(req.params.sessionId);
+    
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    if (!session.product || !PRODUCTS[session.product]) {
+      return res.status(400).json({ error: 'Invalid product in session' });
+    }
+
+    res.json({
+      discordId: session.discord_id,
+      discordUsername: session.discord_username,
+      email: session.email,
+      product: session.product,
+      productName: PRODUCTS[session.product].name,
+      status: session.status || 'pending'
+    });
+  } catch (error) {
+    console.error('Session API error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/payment-status/:sessionId', async (req, res) => {
   try {
     const session = await getPendingPurchase(req.params.sessionId);
