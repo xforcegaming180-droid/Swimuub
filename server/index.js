@@ -22,7 +22,10 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  MessageFlags
+  MessageFlags,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
 } = require('discord.js');
 
 const app = express();
@@ -400,6 +403,25 @@ async function getLicenseStats() {
       FROM license_stock
     `);
     return result.rows[0] || { total: 0, available: 0, used: 0 };
+  } finally {
+    client.release();
+  }
+}
+
+async function getStockByProductType() {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(`
+      SELECT 
+        product_type,
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'available' AND claimed = FALSE THEN 1 ELSE 0 END) as available,
+        SUM(CASE WHEN status = 'assigned' OR claimed = TRUE THEN 1 ELSE 0 END) as used
+      FROM license_stock
+      GROUP BY product_type
+      ORDER BY product_type
+    `);
+    return result.rows;
   } finally {
     client.release();
   }
@@ -1066,9 +1088,27 @@ const commands = [
     .setName('addlicense')
     .setDescription('Add license keys to stock')
     .addStringOption(opt => opt
-      .setName('keys')
-      .setDescription('Comma-separated license keys')
+      .setName('product')
+      .setDescription('Product name (e.g., swimhub)')
       .setRequired(true)
+    )
+    .addStringOption(opt => opt
+      .setName('tier')
+      .setDescription('Product tier (e.g., master, regular)')
+      .setRequired(true)
+      .addChoices(
+        { name: 'Master', value: 'master' },
+        { name: 'Regular', value: 'regular' }
+      )
+    )
+    .addStringOption(opt => opt
+      .setName('duration')
+      .setDescription('License duration')
+      .setRequired(true)
+      .addChoices(
+        { name: 'Monthly', value: 'monthly' },
+        { name: 'Lifetime', value: 'lifetime' }
+      )
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
@@ -1098,69 +1138,165 @@ async function registerCommands() {
 
 // Command handlers
 discordClient.on('interactionCreate', async (interaction) => {
-  if (!interaction.isCommand()) return;
+  if (interaction.isChatInputCommand()) {
+    try {
+      if (interaction.commandName === 'addlicense') {
+        const isAdmin = interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
+        if (!isAdmin) {
+          return interaction.reply({ content: '❌ Admin only', flags: MessageFlags.Ephemeral });
+        }
 
-  try {
-    if (interaction.commandName === 'addlicense') {
-      const isAdmin = interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
-      if (!isAdmin) {
-        return interaction.reply({ content: '❌ Admin only', flags: MessageFlags.Ephemeral });
+        const product = interaction.options.getString('product');
+        const tier = interaction.options.getString('tier');
+        const duration = interaction.options.getString('duration');
+        
+        // Construct product type: e.g., "master-monthly", "regular-lifetime"
+        const productType = `${tier}-${duration}`;
+
+        // Validate product type against PRODUCTS constant
+        if (!PRODUCTS[productType]) {
+          return interaction.reply({ 
+            content: `❌ Invalid product type: ${productType}. Valid types: ${Object.keys(PRODUCTS).join(', ')}`, 
+            flags: MessageFlags.Ephemeral 
+          });
+        }
+
+        // Show a modal for entering license keys (one per line)
+        const modal = new ModalBuilder()
+          .setCustomId(`addlicense_modal_${productType}`)
+          .setTitle(`Add ${tier} ${duration} License Keys`);
+
+        const keysInput = new TextInputBuilder()
+          .setCustomId('license_keys')
+          .setLabel('Enter license keys (one per line)')
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder('KEY1-XXXX-XXXX\nKEY2-YYYY-YYYY\nKEY3-ZZZZ-ZZZZ')
+          .setRequired(true)
+          .setMaxLength(4000);
+
+        const actionRow = new ActionRowBuilder().addComponents(keysInput);
+        modal.addComponents(actionRow);
+
+        await interaction.showModal(modal);
+      } 
+      else if (interaction.commandName === 'stock') {
+        const isAdmin = interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
+        if (!isAdmin) {
+          return interaction.reply({ content: '❌ Admin only', flags: MessageFlags.Ephemeral });
+        }
+
+        const stockByType = await getStockByProductType();
+
+        const embed = new EmbedBuilder()
+          .setColor('#667eea')
+          .setTitle('📊 License Stock Details')
+          .setDescription('Available license keys by product type:');
+
+        if (stockByType.length === 0) {
+          embed.addFields({ name: 'No Stock', value: 'No license keys in database', inline: false });
+        } else {
+          for (const stock of stockByType) {
+            const productType = stock.product_type || 'Unknown';
+            const available = stock.available || '0';
+            const used = stock.used || '0';
+            const total = stock.total || '0';
+            
+            embed.addFields({
+              name: `${productType}`,
+              value: `Available: **${available}** | Used: **${used}** | Total: **${total}**`,
+              inline: false
+            });
+          }
+        }
+
+        interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
       }
-
-      const keysInput = interaction.options.getString('keys');
-      const keys = keysInput.split(',').map(k => k.trim()).filter(k => k);
-
-      if (keys.length === 0) {
-        return interaction.reply({ content: '❌ No valid keys provided', flags: MessageFlags.Ephemeral });
+      else if (interaction.commandName === 'license') {
+        await interaction.reply({
+          content: 'Check your Discord DMs for your license key information',
+          flags: MessageFlags.Ephemeral
+        });
       }
-
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-      for (const key of keys) {
-        await addLicenseKeyToStock(key.toUpperCase(), 'swimhub');
+    } catch (error) {
+      console.error('Command error:', error);
+      if (!interaction.replied && !interaction.deferred) {
+        interaction.reply({ content: '❌ Command failed', flags: MessageFlags.Ephemeral }).catch(() => {});
       }
-
-      const stock = await getStockCount();
-
-      const embed = new EmbedBuilder()
-        .setColor('#10b981')
-        .setTitle('✅ Keys Added')
-        .addFields(
-          { name: 'Keys Added', value: keys.length.toString(), inline: true },
-          { name: 'Total Stock', value: stock.toString(), inline: true }
-        );
-
-      await interaction.editReply({ embeds: [embed] });
-    } 
-    else if (interaction.commandName === 'stock') {
-      const isAdmin = interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
-      if (!isAdmin) {
-        return interaction.reply({ content: '❌ Admin only', flags: MessageFlags.Ephemeral });
-      }
-
-      const stats = await getLicenseStats();
-
-      const embed = new EmbedBuilder()
-        .setColor('#667eea')
-        .setTitle('📊 License Stock')
-        .addFields(
-          { name: 'Available', value: stats.available?.toString() || '0', inline: true },
-          { name: 'Assigned', value: stats.used?.toString() || '0', inline: true },
-          { name: 'Total', value: stats.total?.toString() || '0', inline: true }
-        );
-
-      interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
-    else if (interaction.commandName === 'license') {
-      await interaction.reply({
-        content: 'Check your Discord DMs for your license key information',
-        flags: MessageFlags.Ephemeral
-      });
-    }
-  } catch (error) {
-    console.error('Command error:', error);
-    if (!interaction.replied) {
-      interaction.reply({ content: '❌ Command failed', flags: MessageFlags.Ephemeral });
+  }
+  else if (interaction.isModalSubmit()) {
+    try {
+      // Handle modal submission for adding license keys
+      if (interaction.customId.startsWith('addlicense_modal_')) {
+        const isAdmin = interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
+        if (!isAdmin) {
+          return interaction.reply({ content: '❌ Admin only', flags: MessageFlags.Ephemeral });
+        }
+
+        const productType = interaction.customId.replace('addlicense_modal_', '');
+        const keysInput = interaction.fields.getTextInputValue('license_keys');
+        
+        // Split by newlines and filter empty lines
+        const keys = keysInput
+          .split('\n')
+          .map(k => k.trim())
+          .filter(k => k.length > 0);
+
+        if (keys.length === 0) {
+          return interaction.reply({ 
+            content: '❌ No valid keys provided', 
+            flags: MessageFlags.Ephemeral 
+          });
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        let addedCount = 0;
+        let duplicateCount = 0;
+
+        for (const key of keys) {
+          try {
+            const result = await addLicenseKeyToStock(key.toUpperCase(), productType);
+            if (result) {
+              addedCount++;
+            } else {
+              // Key already exists (ON CONFLICT DO NOTHING returned no rows)
+              duplicateCount++;
+            }
+          } catch (err) {
+            console.error('Error adding key:', err);
+          }
+        }
+
+        // Get stock stats for the specific product type
+        const allStock = await getStockByProductType();
+        const productStock = allStock.find(s => s.product_type === productType);
+        const availableForType = productStock?.available || '0';
+
+        const embed = new EmbedBuilder()
+          .setColor('#10b981')
+          .setTitle('✅ Keys Added')
+          .addFields(
+            { name: 'Product Type', value: productType, inline: true },
+            { name: 'Keys Added', value: addedCount.toString(), inline: true },
+            { name: 'Available Stock', value: availableForType.toString(), inline: true }
+          );
+
+        if (duplicateCount > 0) {
+          embed.addFields({
+            name: '⚠️ Duplicate Keys',
+            value: `${duplicateCount} keys were already in the database`,
+            inline: false
+          });
+        }
+
+        await interaction.editReply({ embeds: [embed] });
+      }
+    } catch (error) {
+      console.error('Modal submit error:', error);
+      if (!interaction.replied && !interaction.deferred) {
+        interaction.reply({ content: '❌ Failed to process', flags: MessageFlags.Ephemeral }).catch(() => {});
+      }
     }
   }
 });
