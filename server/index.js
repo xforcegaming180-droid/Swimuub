@@ -642,7 +642,7 @@ app.get('/checkout.html', (req, res) => {
 });
 
 // Health check endpoint
-app.get('/health', async (req, res) => {
+app.get('/health', webhookLimiter, async (req, res) => {
   try {
     // Check database connection
     const client = await pool.connect();
