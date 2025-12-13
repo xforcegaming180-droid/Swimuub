@@ -525,6 +525,16 @@ app.get('/checkout.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'checkout.html'));
 });
 
+// Polar webhook - GET handler for verification
+app.get('/webhook/polar', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    message: 'Polar webhook endpoint is active',
+    method: 'POST',
+    note: 'This endpoint accepts POST requests from Polar.sh webhooks'
+  });
+});
+
 // Polar webhook
 app.post('/webhook/polar', webhookLimiter, async (req, res) => {
   try {

@@ -122,6 +122,24 @@ Make sure Polar replaces `{{CHECKOUT_ID}}` with the actual checkout ID.
 
 ## API Endpoints
 
+### GET /webhook/polar
+Health check endpoint to verify the webhook is accessible and configured.
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "message": "Polar webhook endpoint is active",
+  "method": "POST",
+  "note": "This endpoint accepts POST requests from Polar.sh webhooks"
+}
+```
+
+This endpoint is useful for:
+- Verifying the webhook URL is accessible
+- Testing network connectivity and routing
+- Confirming the server is running and responding
+
 ### POST /webhook/polar
 Receives webhooks from Polar.sh when purchases are completed.
 
