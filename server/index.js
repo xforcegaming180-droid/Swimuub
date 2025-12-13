@@ -31,14 +31,14 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3000;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD) || 10;
 
 // ---------- CONSTANTS ----------
 const PRODUCTS = {
-  'regular-monthly': { name: 'Regular Monthly', duration: 30 },
-  'regular-lifetime':  { name: 'Regular Lifetime', duration: -1 },
-  'master-monthly': { name: 'Master Monthly', duration: 30 },
-  'master-lifetime': { name: 'Master Lifetime', duration: -1 },
-  'nightly': { name: 'Nightly', duration: 7 }
+  'regular-monthly': { name: 'SwimHub Regular Monthly', duration: 30, tier: 'regular' },
+  'regular-lifetime':  { name: 'SwimHub Regular Lifetime', duration: -1, tier: 'regular' },
+  'master-monthly': { name: 'SwimHub Master Monthly', duration: 30, tier: 'master' },
+  'master-lifetime': { name: 'SwimHub Master Lifetime', duration: -1, tier: 'master' }
 };
 
 const processedWebhooks = new Set();
@@ -427,6 +427,93 @@ async function getStockByProductType() {
   }
 }
 
+async function getLicensesStats() {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) as available,
+        SUM(CASE WHEN status = 'used' THEN 1 ELSE 0 END) as used
+      FROM licenses
+    `);
+    return result.rows[0] || { total: 0, available: 0, used: 0 };
+  } finally {
+    client.release();
+  }
+}
+
+async function addLicenseToLicensesTable(licenseKey) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `INSERT INTO licenses (key_value, status, created_at, updated_at)
+       VALUES ($1, $2, now(), now())
+       ON CONFLICT (key_value) DO NOTHING
+       RETURNING *`,
+      [licenseKey, 'available']
+    );
+    return result.rows[0] || null;
+  } finally {
+    client.release();
+  }
+}
+
+async function checkLowStockAndNotify() {
+  try {
+    const stats = await getLicensesStats();
+    
+    if (parseInt(stats.available) <= LOW_STOCK_THRESHOLD && parseInt(stats.available) > 0) {
+      // Send notification to admin
+      if (discordClient && process.env.ADMIN_DISCORD_ID) {
+        try {
+          const admin = await discordClient.users.fetch(process.env.ADMIN_DISCORD_ID);
+          const embed = new EmbedBuilder()
+            .setColor('#f59e0b')
+            .setTitle('⚠️ Low License Stock Alert')
+            .setDescription('License key inventory is running low!')
+            .addFields(
+              { name: 'Available Keys', value: stats.available.toString(), inline: true },
+              { name: 'Used Keys', value: stats.used.toString(), inline: true },
+              { name: 'Total Keys', value: stats.total.toString(), inline: true }
+            )
+            .setFooter({ text: 'SwimHub License System • Please add more keys soon' })
+            .setTimestamp();
+          
+          await admin.send({ embeds: [embed] });
+          console.log('⚠️ Low stock notification sent to admin');
+        } catch (error) {
+          console.error('Failed to send low stock notification:', error.message);
+        }
+      }
+    } else if (parseInt(stats.available) === 0) {
+      // Critical: Out of stock
+      if (discordClient && process.env.ADMIN_DISCORD_ID) {
+        try {
+          const admin = await discordClient.users.fetch(process.env.ADMIN_DISCORD_ID);
+          const embed = new EmbedBuilder()
+            .setColor('#ef4444')
+            .setTitle('🚨 OUT OF STOCK - CRITICAL')
+            .setDescription('No license keys available! Customers cannot complete purchases.')
+            .addFields(
+              { name: 'Available Keys', value: '0', inline: true },
+              { name: 'Status', value: '❌ Out of Stock', inline: true }
+            )
+            .setFooter({ text: 'SwimHub License System • ADD KEYS IMMEDIATELY' })
+            .setTimestamp();
+          
+          await admin.send({ embeds: [embed] });
+          console.log('🚨 Out of stock notification sent to admin');
+        } catch (error) {
+          console.error('Failed to send out of stock notification:', error.message);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error checking stock levels:', error);
+  }
+}
+
 // ---------- WEBHOOK HANDLERS ----------
 
 async function sendLicenseDM(discordId, licenseKey, product) {
@@ -554,6 +641,42 @@ app.get('/checkout.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'checkout.html'));
 });
 
+// Health check endpoint
+app.get('/health', webhookLimiter, async (req, res) => {
+  try {
+    // Check database connection
+    const client = await pool.connect();
+    await client.query('SELECT 1');
+    client.release();
+    
+    // Check Discord bot status
+    const discordStatus = discordClient && discordClient.isReady() ? 'connected' : 'disconnected';
+    
+    // Get stock levels
+    const stats = await getLicensesStats();
+    
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      services: {
+        database: 'connected',
+        discord: discordStatus
+      },
+      stock: {
+        available: parseInt(stats.available),
+        total: parseInt(stats.total),
+        status: parseInt(stats.available) > LOW_STOCK_THRESHOLD ? 'good' : parseInt(stats.available) > 0 ? 'low' : 'out_of_stock'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'unhealthy',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Polar webhook - GET handler for verification
 app.get('/webhook/polar', (req, res) => {
   res.status(200).json({
@@ -674,6 +797,9 @@ app.post('/webhook/polar', webhookLimiter, async (req, res) => {
 
         const licenseKey = result.rows[0].key_value;
         console.log(`✅ Assigned license key: ${licenseKey} to ${customer_email}`);
+
+        // Check stock levels and notify if low
+        await checkLowStockAndNotify();
 
         // Send Discord notification to admin
         if (discordClient && process.env.ADMIN_DISCORD_ID) {
@@ -1086,30 +1212,7 @@ app.get('/api/payment-status/:sessionId', async (req, res) => {
 const commands = [
   new SlashCommandBuilder()
     .setName('addlicense')
-    .setDescription('Add license keys to stock')
-    .addStringOption(opt => opt
-      .setName('product')
-      .setDescription('Product name (e.g., swimhub)')
-      .setRequired(true)
-    )
-    .addStringOption(opt => opt
-      .setName('tier')
-      .setDescription('Product tier (e.g., master, regular)')
-      .setRequired(true)
-      .addChoices(
-        { name: 'Master', value: 'master' },
-        { name: 'Regular', value: 'regular' }
-      )
-    )
-    .addStringOption(opt => opt
-      .setName('duration')
-      .setDescription('License duration')
-      .setRequired(true)
-      .addChoices(
-        { name: 'Monthly', value: 'monthly' },
-        { name: 'Lifetime', value: 'lifetime' }
-      )
-    )
+    .setDescription('Add license keys to the system')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
@@ -1146,31 +1249,16 @@ discordClient.on('interactionCreate', async (interaction) => {
           return interaction.reply({ content: '❌ Admin only', flags: MessageFlags.Ephemeral });
         }
 
-        const product = interaction.options.getString('product');
-        const tier = interaction.options.getString('tier');
-        const duration = interaction.options.getString('duration');
-        
-        // Construct product type: e.g., "master-monthly", "regular-lifetime"
-        const productType = `${tier}-${duration}`;
-
-        // Validate product type against PRODUCTS constant
-        if (!PRODUCTS[productType]) {
-          return interaction.reply({ 
-            content: `❌ Invalid product type: ${productType}. Valid types: ${Object.keys(PRODUCTS).join(', ')}`, 
-            flags: MessageFlags.Ephemeral 
-          });
-        }
-
         // Show a modal for entering license keys (one per line)
         const modal = new ModalBuilder()
-          .setCustomId(`addlicense_modal_${productType}`)
-          .setTitle(`Add ${tier} ${duration} License Keys`);
+          .setCustomId('addlicense_modal')
+          .setTitle('Add License Keys');
 
         const keysInput = new TextInputBuilder()
           .setCustomId('license_keys')
           .setLabel('Enter license keys (one per line)')
           .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder('KEY1-XXXX-XXXX\nKEY2-YYYY-YYYY\nKEY3-ZZZZ-ZZZZ')
+          .setPlaceholder('KEY1-XXXX-XXXX-XXXX\nKEY2-YYYY-YYYY-YYYY\nKEY3-ZZZZ-ZZZZ-ZZZZ')
           .setRequired(true)
           .setMaxLength(4000);
 
@@ -1185,29 +1273,65 @@ discordClient.on('interactionCreate', async (interaction) => {
           return interaction.reply({ content: '❌ Admin only', flags: MessageFlags.Ephemeral });
         }
 
-        const stockByType = await getStockByProductType();
+        // Get stats from both tables
+        const licenseStockStats = await getStockByProductType();
+        const licensesStats = await getLicensesStats();
 
         const embed = new EmbedBuilder()
-          .setColor('#667eea')
-          .setTitle('📊 License Stock Details')
-          .setDescription('Available license keys by product type:');
+          .setColor('#00d4ff')
+          .setTitle('📊 License Stock Overview')
+          .setDescription('Complete inventory of all license keys')
+          .setTimestamp();
 
-        if (stockByType.length === 0) {
-          embed.addFields({ name: 'No Stock', value: 'No license keys in database', inline: false });
+        // Add Polar integration licenses (generic, no product type)
+        embed.addFields({
+          name: '🔹 Polar Integration Keys',
+          value: `Available: **${licensesStats.available}** | Used: **${licensesStats.used}** | Total: **${licensesStats.total}**`,
+          inline: false
+        });
+
+        // Add product-specific licenses (legacy)
+        if (licenseStockStats.length === 0) {
+          embed.addFields({ 
+            name: '🔸 Product-Specific Keys (Legacy)', 
+            value: 'No product-specific keys in database', 
+            inline: false 
+          });
         } else {
-          for (const stock of stockByType) {
+          const productLines = [];
+          for (const stock of licenseStockStats) {
             const productType = stock.product_type || 'Unknown';
             const available = stock.available || '0';
             const used = stock.used || '0';
             const total = stock.total || '0';
             
-            embed.addFields({
-              name: `${productType}`,
-              value: `Available: **${available}** | Used: **${used}** | Total: **${total}**`,
-              inline: false
-            });
+            // Find matching product display name
+            const productName = PRODUCTS[productType]?.name || productType;
+            productLines.push(`**${productName}**\nAvailable: ${available} | Used: ${used} | Total: ${total}`);
           }
+          
+          embed.addFields({
+            name: '🔸 Product-Specific Keys (Legacy)',
+            value: productLines.join('\n\n'),
+            inline: false
+          });
         }
+
+        // Add summary
+        const totalAvailable = parseInt(licensesStats.available) + 
+          licenseStockStats.reduce((sum, s) => sum + parseInt(s.available || 0), 0);
+        const totalUsed = parseInt(licensesStats.used) + 
+          licenseStockStats.reduce((sum, s) => sum + parseInt(s.used || 0), 0);
+        const grandTotal = parseInt(licensesStats.total) + 
+          licenseStockStats.reduce((sum, s) => sum + parseInt(s.total || 0), 0);
+
+        embed.addFields({
+          name: '📈 Grand Total',
+          value: `Available: **${totalAvailable}** | Used: **${totalUsed}** | Total: **${grandTotal}**`,
+          inline: false
+        });
+
+        embed.setFooter({ text: 'SwimHub License System • Use /addlicense to add keys' });
 
         interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
       }
@@ -1227,13 +1351,12 @@ discordClient.on('interactionCreate', async (interaction) => {
   else if (interaction.isModalSubmit()) {
     try {
       // Handle modal submission for adding license keys
-      if (interaction.customId.startsWith('addlicense_modal_')) {
+      if (interaction.customId === 'addlicense_modal') {
         const isAdmin = interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
         if (!isAdmin) {
           return interaction.reply({ content: '❌ Admin only', flags: MessageFlags.Ephemeral });
         }
 
-        const productType = interaction.customId.replace('addlicense_modal_', '');
         const keysInput = interaction.fields.getTextInputValue('license_keys');
         
         // Split by newlines and filter empty lines
@@ -1256,7 +1379,7 @@ discordClient.on('interactionCreate', async (interaction) => {
 
         for (const key of keys) {
           try {
-            const result = await addLicenseKeyToStock(key.toUpperCase(), productType);
+            const result = await addLicenseToLicensesTable(key.toUpperCase());
             if (result) {
               addedCount++;
             } else {
@@ -1268,19 +1391,19 @@ discordClient.on('interactionCreate', async (interaction) => {
           }
         }
 
-        // Get stock stats for the specific product type
-        const allStock = await getStockByProductType();
-        const productStock = allStock.find(s => s.product_type === productType);
-        const availableForType = productStock?.available || '0';
+        // Get updated stats
+        const stats = await getLicensesStats();
 
         const embed = new EmbedBuilder()
           .setColor('#10b981')
-          .setTitle('✅ Keys Added')
+          .setTitle('✅ License Keys Added')
           .addFields(
-            { name: 'Product Type', value: productType, inline: true },
-            { name: 'Keys Added', value: addedCount.toString(), inline: true },
-            { name: 'Available Stock', value: availableForType.toString(), inline: true }
-          );
+            { name: '📥 Keys Added', value: addedCount.toString(), inline: true },
+            { name: '📊 Total Available', value: stats.available.toString(), inline: true },
+            { name: '🔢 Total in System', value: stats.total.toString(), inline: true }
+          )
+          .setFooter({ text: 'SwimHub License System' })
+          .setTimestamp();
 
         if (duplicateCount > 0) {
           embed.addFields({
